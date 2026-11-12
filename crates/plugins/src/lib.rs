@@ -113,20 +113,28 @@ pub use runtime::{Runtime, activate, manager, runtime};
 /// Refreshes the catalogue and kill list in the background when the last refresh is older than six
 /// hours (B8). Call at startup and periodically; the store change reaches GrantView on next read.
 pub fn refresh_in_background() {
-    if safe_mode() {
-        return;
-    }
-    let _ = std::thread::Builder::new().name("figcraft-plugin-refresh".into()).spawn(|| {
-        let Ok(m) = manager() else { return };
-        let now = craft_ext_store::store::now();
-        let last = m.store.state().map(|s| s.last_refresh).unwrap_or(0);
-        if now.saturating_sub(last) < 6 * 3600 {
-            return;
+    if safe_mode() { return; }
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::Relaxed) { return; }
+    if std::thread::Builder::new().name("figcraft-plugin-refresh".into()).spawn(|| {
+        let mut backoff = 60u64;
+        loop {
+            let result = manager().and_then(|m| {
+                let now = craft_ext_store::store::now();
+                let last = m.store.state().map_err(|e|e.to_string())?.last_refresh;
+                if now.saturating_sub(last) < 6 * 3600 {
+                    return Ok((6u64 * 3600).saturating_sub(now.saturating_sub(last)));
+                }
+                m.refresh(now).map_err(|e|e.to_string())?;
+                Ok(6 * 3600)
+            });
+            let delay = match result {
+                Ok(delay) => { backoff = 60; delay },
+                Err(e) => { log::info!("plugins: catalogue refresh failed: {e}"); let delay=backoff; backoff=(backoff*2).min(15*60); delay },
+            };
+            std::thread::sleep(Duration::from_secs(delay.max(1)));
         }
-        if let Err(e) = m.refresh(now) {
-            log::info!("plugins: catalogue refresh failed: {e}");
-        }
-    });
+    }).is_err() { STARTED.store(false, std::sync::atomic::Ordering::Relaxed); }
 }
 
 /// `figcraft-cli plugin …`: `plugin contract` prints the contract reference, `plugin project <file>`

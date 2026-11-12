@@ -57,6 +57,8 @@ pub fn open_manager() {
 /// Early every frame: serve plugin requests and deliver app events, refresh the catalogue at
 /// startup and every six hours, pick up a project-open prompt, and take Escape for a plugin tool.
 pub fn frame(app: &mut FigApp, ctx: &egui::Context) {
+    // Keep observing shared-store changes even when no contribution is currently enabled.
+    ctx.request_repaint_after(Duration::from_secs(1));
     app.session.pump_plugins();
     if let Some(m) = app.session.message.take() {
         app.toast(m);

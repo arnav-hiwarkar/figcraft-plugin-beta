@@ -66,3 +66,34 @@ web app. For the standalone UI wasm check, enable `--features egui/web_file`, ma
 feature supplied by eframe in the web app (the repository's combined wasm check supplies it).
 No application, test, build, clippy or xtask command was run. The legacy symbol audit is clean;
 ordinary egui control helpers remain. The shared adapter was not changed or activated.
+
+## Runtime integrity follow-up
+
+Plugin groups now hold live synchronization across every nested event and the whole tool gesture:
+commit publishes one batch/history step; rollback publishes nothing. Commit revalidates the original
+document, grant generation, contribution and release. Explicit completion results reach the dispatcher,
+so a guest returning zero cannot hide a cancelled or rolled-back phase. Invalid or denied individual
+operations remain recoverable; revocation, cancellation, stop and document changes abort the group.
+
+Authorization reads fresh store snapshots on the document thread (including immediately after local
+management writes), fails closed on unreadable state, and compares the saved setup generation.
+Store-generation changes reconcile commands, panels and tools and replace their workers, including
+release updates and rollbacks. Native helper supervision remains every 100 ms while idle. Catalogue
+refresh repeats every six hours, with failed attempts retried after 60 seconds and exponential backoff
+capped at 15 minutes.
+
+Init can run on the home screen; document operations return a recoverable `no document` error.
+Opening a document sends init again and the authorized `document.opened` event. Init failures do not
+advance the three-failure pause. Read-only events retain document identity and history; edits record
+missing plugin references once, carrying enabled contribution IDs and their state versions.
+`Document.plugins` participates in collaboration diffs, snapshots, apply and server persistence;
+`figcraft-cli plugin project FILE` already loads those references directly from the FigCraft file.
+
+Follow-up validation: `cargo test -p figcraft-plugins` passed all 13 tests, including live group
+publication/rollback, gesture completion and original-generation checks, recoverable invalid/denied
+operations, no-document init, init failure accounting, store reconciliation, clean read-only history,
+and collaboration/server persistence of references. Scoped native `cargo check` passed for
+`figcraft-plugins`, `figcraft-cli` and `figcraft-ui-egui`; the UI check also passed for
+`wasm32-unknown-unknown --features egui/web_file` (covering doc, collab and engine dependencies).
+No workspace tests, application build/run, clippy or commits were performed; craft-extensions was
+read-only. Existing unused-patch, missing optional fonts and wasm fontdb dead-code warnings remain.

@@ -229,6 +229,8 @@ pub enum DocProp {
     Vote,
     /// Ended votes' results kept in the file, oldest first (whole).
     VoteHistory,
+    /// Plugin references saved with this document (never grants).
+    Plugins,
 }
 
 /// A document-level entry, by id.

@@ -25,11 +25,13 @@ impl Session {
     pub fn pump_plugins(&mut self) { if let Some(rt) = self.plugins.clone() { rt.pump(self); } }
     pub fn begin_group(&mut self) -> GroupMark {
         let mark = GroupMark { docs: self.docs.clone(), active: self.active, journal: std::mem::take(&mut self.journal), pending: self.pending_events.len(), last: self.last_command.clone() };
+        for d in &mark.docs { self.live_hold(d.uid, true); }
         self.group_depth += 1;
         for d in &mut self.docs { d.history.limit = usize::MAX; }
         mark
     }
     pub fn finish_group(&mut self, mark: GroupMark, label: &str, commit: bool) {
+        let uids: Vec<_> = mark.docs.iter().map(|d| d.uid).collect();
         let pending = std::mem::replace(&mut self.journal, mark.journal);
         self.group_depth = self.group_depth.saturating_sub(1);
         if !commit {
@@ -40,10 +42,11 @@ impl Session {
         } else {
             self.journal.extend(pending);
             for before in mark.docs {
+                let live = self.live_doc(before.uid);
                 if let Some(d) = self.docs.iter_mut().find(|d| d.uid == before.uid) {
                     let changed = !std::sync::Arc::ptr_eq(&before.doc, &d.doc);
                     d.history = before.history;
-                    if changed {
+                    if changed && !live {
                         d.history.redo.clear();
                         d.history.undo.push(HistoryEntry { label: label.into(), doc: before.doc, selection: before.selection, page: before.page });
                         let excess = d.history.undo.len().saturating_sub(d.history.limit.max(1));
@@ -51,6 +54,10 @@ impl Session {
                     }
                 }
             }
+        }
+        for uid in uids {
+            self.live_hold(uid, false);
+            if commit { self.live_edit(uid, Some(label)); }
         }
         if self.group_depth == 0 { self.flush_pending_events(); }
     }

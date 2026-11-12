@@ -353,6 +353,7 @@ doc_scalars! {
     Timer => timer,
     Vote => vote,
     VoteHistory => vote_history,
+    Plugins => plugins,
 }
 
 /// Keyed maps (no order): changed and added entries are put, missing ones removed.

@@ -10,7 +10,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(PoisonEr
 fn err(e: impl ToString) -> OpError { OpError::invalid(e.to_string()) }
 fn key(i: &Invocation) -> usize { Arc::as_ptr(&i.cancel) as usize }
 #[derive(Clone)]
-struct Dispatch { uid: u64, hash: Option<String>, surface: Option<(String,u64)> }
+struct Dispatch { uid: u64, hash: Option<String>, surface: Option<(String,u64)>, completion: Arc<Mutex<Option<Result<(),String>>>> }
 enum Kind { Begin, Call(String,Value), Finish(bool) }
 struct Request { inv: Invocation, context: Dispatch, kind: Kind, reply: mpsc::Sender<Result<Value,OpError>> }
 struct Bridge { contract: craft_ext_host::api::AppContract, tx: mpsc::SyncSender<Request>, context: Arc<Mutex<Option<Dispatch>>> }
@@ -24,6 +24,7 @@ impl Bridge {
 }
 impl AppApi for Bridge {
     fn contract(&self)->&craft_ext_host::api::AppContract { &self.contract }
+    fn authorizes_on_owner_thread(&self)->bool { true }
     fn begin(&self,i:&Invocation)->Result<(),OpError> { self.ask(i,Kind::Begin).map(|_|()) }
     fn call(&self,i:&Invocation,op:&str,a:Value)->Result<Value,OpError> { self.ask(i,Kind::Call(op.into(),a)) }
     fn finish(&self,i:&Invocation,c:bool) { if self.ask(i,Kind::Finish(c)).is_err() { i.cancel.store(true,Ordering::Relaxed); } }
@@ -34,7 +35,7 @@ struct Contribution { plugin: ExtensionId, version: Version, name: String, id: S
 struct Surface { view: PluginSurface, owner: Contribution }
 struct Gesture { mark: GroupMark, uid: u64, owner: Contribution, generation: u64 }
 #[derive(Default)]
-struct State { contributions: Vec<Contribution>, workers: BTreeMap<String,mpsc::SyncSender<Job>>, surfaces: BTreeMap<String,Surface>, overlays: BTreeMap<String,Value>, selected_tool: Option<Contribution>, gesture: Option<Gesture>, seen: Option<(u64,Value,u64)>, prompt: Option<Vec<(PluginRef,Status)>>, failures: BTreeMap<ExtensionId,u32> }
+struct State { contributions: Vec<Contribution>, workers: BTreeMap<String,mpsc::SyncSender<Job>>, surfaces: BTreeMap<String,Surface>, overlays: BTreeMap<String,Value>, selected_tool: Option<Contribution>, gesture: Option<Gesture>, generation: Option<u64>, seen: Option<(u64,Value,u64)>, prompt: Option<Vec<(PluginRef,Status)>>, failures: BTreeMap<ExtensionId,u32> }
 pub struct Runtime { root: PathBuf, app: AppId, grants: Arc<LiveGrants>, contract: craft_ext_host::api::AppContract, state: Mutex<State>, rx: Mutex<mpsc::Receiver<Request>>, tx: mpsc::SyncSender<Request>, deferred: Mutex<VecDeque<Request>>, interactive: AtomicBool }
 pub fn manager() -> Result<Manager,String> {
     let root=craft_ext_store::location::root_for(craft_ext_store::location::Os::current(),|k|std::env::var(k).ok()).map_err(|e|e.to_string())?;
@@ -58,15 +59,17 @@ pub fn activate(s:&mut Session) -> Result<Arc<Runtime>,String> {
 impl Runtime {
     pub fn new(root:PathBuf)->Result<Arc<Self>,String> {
         let c=contract().map_err(|e|e.to_string())?;
-        let grants=LiveGrants(Mutex::new(GrantView::open(&root,c.app.clone()).map_err(|e|e.to_string())?));
+        let grants=LiveGrants { root:root.clone(), app:c.app.clone() };
         let (tx,rx)=mpsc::sync_channel(64);
         Ok(Arc::new(Self { root, app:c.app.clone(), grants:Arc::new(grants), contract:c, state:Mutex::new(State::default()), rx:Mutex::new(rx), tx, deferred:Mutex::new(VecDeque::new()), interactive:AtomicBool::new(false) }))
     }
     pub fn manager(&self)->Manager { Manager::new(Store::at(&self.root),Some(self.app.clone()),self.contract.provided.clone(),craft_ext_host::native::platform()) }
     pub fn take_project_prompt(&self)->Option<Vec<(PluginRef,Status)>> { lock(&self.state).prompt.take() }
     fn load(&self,s:&mut Session)->Result<(),String> {
-        let releases=lock(&self.grants.0).enabled_contributions(&self.app).map_err(|e|e.to_string())?;
         let store=Store::at(&self.root); let saved=store.state().map_err(|e|e.to_string())?;
+        let releases=GrantView::open(&self.root,self.app.clone()).and_then(|v|v.enabled_contributions(&self.app)).map_err(|e|e.to_string())?;
+        // Never mark a mixed registry snapshot current after a concurrent management write.
+        if store.state().map_err(|e|e.to_string())?.generation!=saved.generation {return Err("plugin store changed during reconciliation".into());}
         for (id,version,dir,manifest,enabled) in releases {
             let hash=saved.packages.get(&id).and_then(|p|p.releases.get(&version)).map(|r|r.sha256.clone());
             let source=if saved.packages.get(&id).is_some_and(|p|matches!(p.origin,craft_ext_store::state::Origin::Catalogue{..})) { Source::Catalogue } else { Source::Local };
@@ -86,12 +89,13 @@ impl Runtime {
                     };
                     let tx=self.spawn(code)?; lock(&self.state).workers.insert(worker.clone(),tx);
                 }
-                let owner=Contribution { plugin:id.clone(),version,name:manifest.name.clone(),id:c.id.clone(),label:c.label.clone(),kind:c.kind.clone(),declared:c.permissions.iter().chain(&c.optional_permissions).cloned().collect::<Vec<_>>().into(),worker,reference:PluginRef { id:id.clone(), version,sha256:hash.clone(),source,name:manifest.name.clone() } };
+                let owner=Contribution { plugin:id.clone(),version,name:manifest.name.clone(),id:c.id.clone(),label:c.label.clone(),kind:c.kind.clone(),declared:c.permissions.iter().chain(&c.optional_permissions).cloned().collect::<Vec<_>>().into(),worker,reference:PluginRef { id:id.clone(),version,sha256:hash.clone(),source,name:manifest.name.clone(),contributions:enabled.iter().cloned().collect(),state_versions:Some(manifest.contributions_for(&self.app).filter(|c|enabled.contains(&c.id)).map(|c|(c.id.clone(),c.state_version)).collect()) } };
                 let mut st=lock(&self.state);
                 if c.kind==ContributionKind::Panel { st.surfaces.insert(format!("{id}/{}",c.id),Surface { view:PluginSurface { key:format!("{id}/{}",c.id),title:c.label.clone(),tree:None,rev:0,window:false,open:false },owner:owner.clone() }); }
                 st.contributions.push(owner);
             }
         }
+        lock(&self.state).generation=Some(saved.generation);
         let cs=lock(&self.state).contributions.clone();
         for c in cs { if let Err(e)=self.deliver(s,&c,json!({"event":"init"}),true) { log::warn!("plugin {} init: {e}",c.plugin); } }
         Ok(())
@@ -117,18 +121,20 @@ impl Runtime {
     }
     fn invocation(&self,c:&Contribution)->Invocation { Invocation { app:self.app.clone(), plugin:c.plugin.clone(),version:c.version,contribution:c.id.clone(),grant_generation:self.grants.generation(&c.plugin),cancel:Arc::new(AtomicBool::new(false)),deadline:Some(Instant::now()+Duration::from_secs(8)),label:format!("{} · {}",c.label,c.name),declared:c.declared.clone() } }
     fn deliver(&self,s:&mut Session,c:&Contribution,event:Value,wait:bool)->Result<(),String> {
-        // Without a document (the home screen) uid 0 never matches, so document ops are refused as stale.
+        // UID zero is a document-independent init context; document operations report no document.
         let uid=s.ds().map_or(0,|d|d.uid); let inv=self.invocation(c);
+        let init=event["event"]=="init";
+        let completion=Arc::new(Mutex::new(None));
         if lock(&self.state).failures.get(&c.plugin).copied().unwrap_or(0)>=3 { return Err("plugin paused after three failures".into()); }
         let surface=event["surface"].as_str().zip(event["rev"].as_u64()).map(|(k,r)|(format!("{}/{k}",c.plugin),r));
-        let context=Dispatch { uid,hash:c.reference.sha256.clone(),surface };
+        let context=Dispatch { uid,hash:c.reference.sha256.clone(),surface,completion:completion.clone() };
         let (done,rx)=mpsc::channel();
         lock(&self.state).workers.get(&c.worker).ok_or("worker stopped")?.try_send(Job { inv:inv.clone(),context,event,done }).map_err(|_|"worker queue full")?;
         if !wait { return Ok(()); }
         let deadline=Instant::now()+Duration::from_secs(9);
         loop {
             self.serve(s);
-            match rx.try_recv() { Ok(r)=> { if r.is_err() { *lock(&self.state).failures.entry(c.plugin.clone()).or_default()+=1; } return r; },Err(mpsc::TryRecvError::Disconnected)=>return Err("worker stopped".into()),_=>{} }
+            match rx.try_recv() { Ok(r)=> { let r=r.and_then(|_|lock(&completion).take().unwrap_or_else(||Err("plugin transaction did not complete".into()))); if r.is_err() && !init { *lock(&self.state).failures.entry(c.plugin.clone()).or_default()+=1; } return r; },Err(mpsc::TryRecvError::Disconnected)=>return Err("worker stopped".into()),_=>{} }
             if Instant::now()>deadline { inv.cancel.store(true,Ordering::Relaxed); return Err("plugin event timed out".into()); }
             // A bounded receive avoids spinning while wasm executes between calls.
             let request=lock(&self.rx).recv_timeout(Duration::from_millis(2));
@@ -136,10 +142,10 @@ impl Runtime {
         }
     }
     fn validate(&self,s:&Session,r:&Request)->Result<(),OpError> {
-        if crate::safe_mode() || s.ds().map_err(err)?.uid!=r.context.uid { return Err(OpError::new(Code::Stale,"document changed")); }
+        if crate::safe_mode() || s.ds().map_or(0,|d|d.uid)!=r.context.uid { return Err(OpError::new(Code::Stale,"document changed")); }
         let state=Store::at(&self.root).state().map_err(err)?;
         let setup=state.apps.get(&self.app).and_then(|a|a.get(&r.inv.plugin)).ok_or_else(||OpError::denied("plugin disabled"))?;
-        if setup.active!=Some(r.inv.version) || !setup.enabled.contains(&r.inv.contribution) || r.inv.cancelled() || self.grants.stopped(&r.inv.plugin,r.inv.version) || self.grants.generation(&r.inv.plugin)!=r.inv.grant_generation { return Err(OpError::denied("plugin or contribution revoked")); }
+        if setup.active!=Some(r.inv.version) || !setup.enabled.contains(&r.inv.contribution) || r.inv.cancelled() || self.grants.stopped(&r.inv.plugin,r.inv.version) || setup.grant_generation!=r.inv.grant_generation { return Err(OpError::denied("plugin or contribution revoked")); }
         let hash=state.packages.get(&r.inv.plugin).and_then(|p|p.releases.get(&r.inv.version)).map(|r|r.sha256.clone());
         if hash!=r.context.hash { return Err(OpError::new(Code::Stale,"plugin release changed")); }
         if let Some((k,rev))=&r.context.surface { if !lock(&self.state).surfaces.get(k).is_some_and(|s|s.view.open && s.view.rev==*rev) { return Err(OpError::new(Code::Stale,"panel changed")); } }
@@ -149,7 +155,9 @@ impl Runtime {
         let first=lock(&self.deferred).pop_front().or_else(||lock(&self.rx).try_recv().ok());
         let Some(begin)=first else { return };
         if !matches!(begin.kind,Kind::Begin) { let _=begin.reply.send(Err(err("event not open"))); return; }
-        if let Err(e)=self.validate(s,&begin) { let _=begin.reply.send(Err(e)); return; }
+        if let Err(e)=self.validate(s,&begin) { *lock(&begin.context.completion)=Some(Err(e.to_string())); let _=begin.reply.send(Err(e)); return; }
+        *lock(&begin.context.completion)=Some(Err("plugin transaction aborted".into()));
+        let before=s.ds().ok().map(|d|d.doc.clone());
         let mark=s.begin_group(); let selected=s.selection().to_vec(); let mut changes=Vec::new(); let mut failed=false;
         let _=begin.reply.send(Ok(json!({"selection":selected})));
         let deadline=Instant::now()+Duration::from_secs(5);
@@ -159,21 +167,33 @@ impl Runtime {
             if key(&r.inv)!=key(&begin.inv) { lock(&self.deferred).push_back(r); continue; }
             match r.kind {
                 Kind::Call(ref op,ref args)=> {
-                    let out=self.validate(s,&begin).and_then(|_|authorize(&self.contract,self.grants.as_ref(),&begin.inv,op,args)).and_then(|_|self.op(s,&begin.inv,op,args.clone(),&mut changes));
-                    failed|=out.is_err(); let _=r.reply.send(out);
+                    let valid=self.validate(s,&begin);
+                    failed|=valid.is_err();
+                    let out=valid.and_then(|_|authorize(&self.contract,self.grants.as_ref(),&begin.inv,op,args)).and_then(|_|self.op(s,&begin.inv,op,args.clone(),&mut changes));
+                    let _=r.reply.send(out);
                 }
                 Kind::Finish(commit)=> {
                     let valid=self.validate(s,&begin); let commit=commit && !failed && valid.is_ok();
-                    if commit { if let Ok(d)=s.doc_mut() { if let Some(c)=lock(&self.state).contributions.iter().find(|c|c.plugin==begin.inv.plugin && c.id==begin.inv.contribution) { if !d.plugins.iter().any(|p|p.id==c.plugin) { d.plugins.push(c.reference.clone()); } } } }
+                    if commit && before.as_ref().is_some_and(|before|s.ds().is_ok_and(|d|!Arc::ptr_eq(before,&d.doc))) {
+                        let reference=lock(&self.state).contributions.iter().find(|c|c.plugin==begin.inv.plugin && c.id==begin.inv.contribution).map(|c|c.reference.clone());
+                        if let Some(reference)=reference {
+                            if s.doc().is_ok_and(|d|!d.plugins.iter().any(|p|p.id==reference.id)) {
+                                if let Ok(d)=s.doc_mut() { d.plugins.push(reference); }
+                            }
+                        }
+                    }
                     s.finish_group(mark,&begin.inv.label,commit);
                     if commit { self.apply(&begin.inv,changes); }
-                    let _=r.reply.send(valid.map(|_|Value::Null)); return;
+                    let result=valid.and_then(|_|if commit {Ok(Value::Null)} else {Err(OpError::new(Code::Cancelled,"plugin transaction rolled back"))});
+                    *lock(&begin.context.completion)=Some(result.as_ref().map(|_|()).map_err(ToString::to_string));
+                    let _=r.reply.send(result); return;
                 }
                 Kind::Begin=> { failed=true; let _=r.reply.send(Err(err("nested begin"))); }
             }
         }
     }
     fn op(&self,s:&mut Session,i:&Invocation,op:&str,a:Value,changes:&mut Vec<(String,Value)>)->Result<Value,OpError> {
+        if s.ds().is_err() && !op.starts_with("ui.") && op!="canvas.overlay.set" { return Err(err("no document")); }
         match op {
             "document.info"=>Ok(json!({"name":s.doc().map_err(err)?.name,"uid":s.ds().map_err(err)?.uid})),
             "page.list"=>Ok(json!(s.doc().map_err(err)?.pages.iter().filter_map(|id|s.doc().ok()?.node(*id)).collect::<Vec<_>>())),
@@ -230,15 +250,23 @@ impl PluginRuntime for Runtime {
     }
     fn pump(&self,s:&mut Session) {
         self.interactive.store(true,Ordering::Relaxed);
-        if crate::safe_mode() {return;}
+        if crate::safe_mode() { self.tool_event(s,"cancel",[0.,0.],Value::Null); return;}
+        let generation=Store::at(&self.root).state().map(|s|s.generation).ok();
+        if generation!=lock(&self.state).generation {
+            self.tool_event(s,"cancel",[0.,0.],Value::Null);
+            { let mut st=lock(&self.state); st.workers.clear(); st.contributions.clear(); st.surfaces.clear(); st.overlays.clear(); st.selected_tool=None; st.failures.clear(); st.generation=None; }
+            if generation.is_some() { if let Err(e)=self.load(s) {log::warn!("plugin reconciliation: {e}");} }
+        }
         let cancel={let st=lock(&self.state); st.gesture.as_ref().is_some_and(|g|s.ds().map_or(true,|d|d.uid!=g.uid) || self.grants.stopped(&g.owner.plugin,g.owner.version) || self.grants.generation(&g.owner.plugin)!=g.generation)};
         if cancel {self.tool_event(s,"cancel",[0.,0.],Value::Null);}
         for _ in 0..64 { if lock(&self.deferred).is_empty() && lock(&self.rx).try_recv().map(|r|lock(&self.deferred).push_back(r)).is_err() {break;} self.serve(s); }
-        let Ok(d)=s.ds() else {return}; let now=(d.uid,json!(d.selection),d.page.0);
+        let Ok(d)=s.ds() else {lock(&self.state).seen=None;return}; let now=(d.uid,json!(d.selection),d.page.0);
         let previous=lock(&self.state).seen.replace(now.clone());
         let mut events=Vec::new();
         if previous.as_ref().is_none_or(|p|p.0!=now.0) {
             let statuses=self.manager().check_project(&d.doc.plugins).unwrap_or_default(); if statuses.iter().any(|(_,s)|!s.ready()) {lock(&self.state).prompt=Some(statuses);}
+            let cs=lock(&self.state).contributions.clone();
+            for c in cs {let _=self.deliver(s,&c,json!({"event":"init"}),true);}
             events.push("document.opened");
         }
         if previous.as_ref().is_none_or(|p|p.1!=now.1) {events.push("selection.changed");}
@@ -257,12 +285,22 @@ impl PluginRuntime for Runtime {
         let c=lock(&self.state).selected_tool.clone(); let Some(c)=c else{return};
         if phase=="begin" { if self.busy() {return;} let uid=s.ds().map_or(0,|d|d.uid); lock(&self.state).gesture=Some(Gesture {mark:s.begin_group(),uid,owner:c.clone(),generation:self.grants.generation(&c.plugin)}); }
         if !self.busy() {if phase=="cancel" {lock(&self.state).selected_tool=None;} return;}
-        let result=self.deliver(s,&c,json!({"event":"tool","phase":phase,"at":at,"modifiers":modifiers}),true);
+        let mut result=self.deliver(s,&c,json!({"event":"tool","phase":phase,"at":at,"modifiers":modifiers}),true);
         if phase=="commit" || phase=="cancel" || result.is_err() {
-            if let Some(g)=lock(&self.state).gesture.take() {s.finish_group(g.mark,&format!("{} · {}",c.label,c.name),phase=="commit" && result.is_ok());}
+            let gesture=lock(&self.state).gesture.take();
+            if let Some(g)=gesture {let mut inv=self.invocation(&g.owner); inv.grant_generation=g.generation;
+                let (reply,_)=mpsc::channel();
+                let original=Request {inv,context:Dispatch {uid:g.uid,hash:g.owner.reference.sha256.clone(),surface:None,completion:Arc::new(Mutex::new(None))},kind:Kind::Begin,reply};
+                let valid=self.validate(s,&original);
+                if let Err(e)=&valid { result=Err(e.to_string()); }
+                s.finish_group(g.mark,&format!("{} · {}",c.label,c.name),phase=="commit" && result.is_ok() && valid.is_ok());}
             lock(&self.state).overlays.clear();
             if phase=="cancel" || result.is_err() {lock(&self.state).selected_tool=None;}
         }
         if let Err(e)=result {s.message=Some(e);}
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod tests;

@@ -2,15 +2,16 @@
 use craft_ext_core::{id::ExtensionId, permission::Permission, version::Version};
 use craft_ext_host::api::Grants;
 use craft_ext_store::view::GrantView;
-use std::sync::Mutex;
 
-pub struct LiveGrants(pub Mutex<GrantView>);
+pub struct LiveGrants {
+    pub root: std::path::PathBuf,
+    pub app: craft_ext_core::id::AppId,
+}
 impl LiveGrants {
     fn read<T>(&self, fallback: T, f: impl FnOnce(&GrantView) -> T) -> T {
-        let Ok(mut view) = self.0.lock() else { return fallback };
-        if view.refresh_if_changed().is_err() {
-            return fallback;
-        }
+        // Read a complete snapshot on every check: a failed refresh must never leave cached
+        // permissions usable, including within the metadata probe throttle window.
+        let Ok(view) = GrantView::open(&self.root, self.app.clone()) else { return fallback };
         f(&view)
     }
 }
