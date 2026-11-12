@@ -10,9 +10,9 @@ use crate::Session;
 use crate::components::tests::{ex, idv};
 use crate::error::EngineError;
 use crate::paint_tests::fill;
-use crate::plugins_tests::rect;
+
 use crate::variables_behaviour_tests::vid;
-use crate::widgets_tests::err;
+
 use figcraft_color::Color;
 
 /// A "C" collection (modes M) with `ink` #FF0000 and `edge` #00FF00 (the error-case set's seeds).
@@ -507,4 +507,13 @@ fn negative_zero_bounds_are_stored_as_plain_zero() {
     );
     let list = serde_json::to_string(&ex(&mut s, "variable.list", json!({}))).unwrap();
     assert!(!list.contains("-0"), "no negative zeros persisted: {list}");
+}
+
+fn rect(s: &mut Session, x: f64) -> figcraft_doc::NodeId {
+    idv(&ex(s, "shape.rectangle", json!({"x": x, "y": 0, "width": 10, "height": 10})))
+}
+fn err(s: &mut Session, cmd: &str, p: serde_json::Value) -> String {
+    let error = s.execute(cmd, &p).unwrap_err();
+    assert!(!matches!(error, EngineError::Internal { .. }), "{error}");
+    error.to_string()
 }

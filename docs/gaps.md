@@ -237,49 +237,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   [`localization-parity.md`](localization-parity.md); how to add one in
   [`translating.md`](translating.md).
 
-### 6. Plugins: widgets without timers, a self-hosted directory but no public catalogue; Figma's plugins don't run
-- **Landed (#101):** sandboxed WebAssembly plugins (wasmi, metered, memory cap, no WASI, also in
-  the browser) acting through the command registry, one undo step per run, manifest permissions,
-  Plugins menu, Run last plugin, Manage plugins, `plugin.*` commands, a Rust SDK and two examples
-  ([`plugins.md`](plugins.md)). Plugin panels and settings (ABI v2, 2026-10-11): a plugin shows a
-  panel of fields and buttons drawn with FigCraft's widgets and is called back for each button or
-  changed value (one undo step per callback, same sandbox limits), driven headless with
-  `plugin.ui` / `plugin.event` / `plugin.close`; per-plugin settings kept with the preferences.
-  Widgets (plugin API 3, 2026-10-12): a plugin draws a layer of its own on the canvas (Plugins ▸
-  Widgets, `widget.insert`), validated and built with locked layers inside, called back for clicks
-  on the parts it names (one undo step each, a fresh metered sandbox, the state kept in the layer
-  so it saves, copies, undoes, exports and syncs), `widget.click` / `widget.list` for agents, a
-  Counter example; panels of several plugins side by side; the colour picker on plugin colour
-  fields. A plugin directory on `figcraft-server` (2026-10-12): bundles published with the server
-  key and checked in full (`figcraft-cli plugin publish`), browsed, installed after a permissions
-  confirmation and updated from Plugins ▸ Manage plugins ▸ Browse, downloads checked against their
-  SHA-256, `plugin.directory.*` for scripts and MCP, moderation with `figcraft-server plugins`.
-  Widget fields and property menus (plugin API 4, 2026-10-24): a widget's text layer can be an
-  editable field, edited on the canvas with a double-click like any text or with `widget.setText`
-  (the value, cleaned and capped, goes into the widget's state and the plugin redraws; one undo
-  step), and a widget can carry a property menu of actions, toggles and colour choices, shown in a
-  small bar while it's selected and driven with `widget.menu`; the Counter example uses both.
-  Widget hover styles (2026-10-30): a widget layer's `hover` (fill, stroke, opacity, a text's
-  colour) shows while the pointer is over it on the canvas, as a live preview that is never saved
-  or synced and that any command ends (`widget.hover` for agents); the Counter's buttons darken.
-  Sliders (2026-10-30): a panel control or command parameter of type `slider` (a number between
-  its `min` and `max`) is drawn as a slider with its value beside it; the plugin is called back
-  once, when the drag ends.
-  Panel images (2026-10-30): an `image` control shows a picture the plugin carries (base64, at most
-  256 KB and 4,096 pixels on a side), as wide as a field at most, named by its label.
-  Widgets open panels (plugin API 5, 2026-10-30): a widget's callback can show its plugin's panel,
-  whose callbacks get the widget's id and state and redraw it, one undo step each.
-  Lines and SVG (plugin API 6, 2026-10-31): a widget layer can be a `line` or an `svg`, whose
-  picture comes in as locked layers, scaled to fit a size.
-- **Missing:** a public catalogue and Community files, publisher accounts and signatures, ratings
-  and install counts, background update checks, the directory in the browser build; widgets have no
-  timers. Figma's own plugins are JavaScript against
-  Figma's plugin API and don't run.
-- **Impact:** teams that depend on specific Figma plugins (icons, content, accessibility checks)
-  can't bring them. FigCraft's CLI, control channel and MCP server cover agent automation better
-  than Figma does.
-- **Estimate:** 6–22 h for the missing pieces of FigCraft's own API. Running Figma's plugins
-  needs a JS engine and an API shim: **owner decision needed**.
+### 6. Plugins: shared Craft integration pending
+The legacy runtime and distribution system have been removed. Existing layer metadata and previews remain preserved; the new adapter is not activated. See [migration work](plugin-migration.md).
 
 ### 7. CPU canvas where Figma uses the GPU
 - **Missing:** GPU rendering of the canvas. FigCraft renders with tiny-skia on the CPU (banded,

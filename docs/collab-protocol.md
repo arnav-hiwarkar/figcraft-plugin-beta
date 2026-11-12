@@ -259,11 +259,9 @@ Client → server:
 | `OpenLibrary {protocol, file, token, client_version}` | Instead of `Hello`: use a file's team library with one of the file's share links. |
 | `Library {fetch {have?, usage?} \| publish {archive} \| usage \| reportDetached {file, components} \| detached \| reportInserted {file, components} \| actions \| reportAssets {file, styles, variables} \| assets}` | A request on a library connection; each gets one `Library` reply, in order. `usage` is `{file, components: [(id, instances)]}`; `reportDetached` gives the asking file's detached instances per component the same way (answered `noted`), `detached` asks for every file's. The last two are newer: a server from before them can't read them and refuses the request. |
 | `Signal {kind, text}` | Ephemeral presence, only after the server's `ready`: `chat` (the cursor chat message; empty: closed), `spotlight` (`"on"`, or empty: stopped) or `name` (your new name: the server keeps it, cleaned like a hello's, and sends everyone, you too, your `PeerJoined`; never passed on as a signal). |
-| `OpenPlugins {protocol, key, client_version}` | Instead of `Hello`: use the server's plugin directory; `key` empty to browse, the server key to publish too. |
 | `OpenHosting {protocol, client_version, file, owner}` | Instead of `Hello`: ask about the server's hosting; publish without the key (`Admin publish`) when it is open to the public; with a file's id and owner token, manage that file (`Admin links \| createLink \| revoke \| rename \| remove` of it). Answered with `Hosting` or `Refused`. |
 | `Admin {rename {file, name} \| listing \| reports \| block {ip} \| unblock {ip} \| blocked}` | Later managing requests: rename a file on the server, the files with what the operator moderates by, the reports, blocking addresses (an IPv6 address: its /64). Owner tokens may only rename their file. |
 | `Report {reason}` | On a joined connection, only to a server that sent `Hosting`: report the file to the operator (at most 500 characters kept; ten an hour per address). |
-| `Plugins {list {query} \| fetch {id, version?} \| publish {bundle} \| unpublish {id, version?}}` | A request on a plugin directory connection; each gets one `Plugins` reply, in order. `bundle` is a plugin bundle's bytes (`figcraft_plugin::bundle`). |
 | `Resolve {protocol, client_version, code}` | Instead of `Hello`: ask which file a join code opens (the code's nine symbols). Answered with `Resolved`, then the server closes the connection; a code it doesn't know, too many wrong ones from the address, or a session hosted by an app is `Refused` with the reason. |
 | `Admin {code {file, token}}` | A later managing request (with the server key, or the file's owner token on an open hosting connection): a new join code for the link of `file` whose token this is. A link has one code; asking again replaces it. |
 | `Admin {owned {files: [[file, owner]]}}` | A later request, on any open hosting connection (also one that named no file when it opened): what became of the files these `(file id, owner token)` pairs own, at most 200 a request. Answered with `Admin owned`. |
@@ -284,7 +282,6 @@ Server → client:
 | `Hosting {open, operator, terms, idle_secs, max_file_mb, expires?}` | The answer to `OpenHosting`, and after a welcome to clients whose hello announced `hosting`: anyone may publish, how to reach the operator, the terms (a URL), how long files published without the key are kept unopened, the largest file, and this file's expiry (seconds since 1970). |
 | `Admin {hosted {file, edit, view, owner, expires?} \| listing [row] \| reports [report] \| blocked [ip]}` | A file published without the key with its links and owner token (shown once), and the answers to the later managing requests. |
 | `Reported {error?}` | The answer to `Report`: kept, or why not. |
-| `Plugins {ready {publisher} \| list [entry] \| bundle {entry, bundle} \| published entry \| removed [version] \| failed {reason}}` | A plugin directory connection's answer: opened (with the key or not), the latest version of each plugin with the versions kept, a bundle and its entry (its SHA-256 among them), kept, unpublished, or why not. |
 | `Resolved {file, token}` | The answer to `Resolve`: the file the code opens and its link's token, which the client then joins with in an ordinary `Hello` on a new connection (so reconnects, access and revocation are the link's). |
 | `Admin {code {code}}` | The answer to `Admin code`: the link's new join code, shown this once (the server keeps only what it needs to recognise it). |
 | `Admin {owned [{name, links, expires?} \| null]}` | The answer to `Admin owned`, one entry per pair asked about, in order: the file's name on the server, the ids of its share links (the owner's own and the ones made for others) and its expiry; `null` when that token manages no file of that id (removed, expired, never there, or a wrong token: they read the same). |
@@ -851,23 +848,7 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   them. The variants are appended to the enums, so the older messages keep their bytes; an older server refuses the new
   requests, and the app ignores that.
 
-*Built* (the plugin directory; operating it: [`server.md`](server.md#plugin-directory), publishing and
-installing: [`plugins.md`](plugins.md#plugin-directories)):
-
-- **A plugin directory connection.** A connection that opens with `OpenPlugins {key}` lists and
-  fetches plugins with no credential at all, and publishes or unpublishes them when `key` is the
-  server's (a wrong key is refused like a managing connection's). Requests are one-shot, like a
-  library connection's. A server older than the directory can't read `OpenPlugins` and refuses the
-  connection; the app says the server has no plugin directory.
-- **What travels.** A plugin bundle: a magic number, then length-prefixed parts (the manifest's
-  JSON, the module, up to 32 named assets), uncompressed, so nothing expands beyond the bytes sent.
-  Its SHA-256 names it on the server (`plugins/<sha256>.bin`) and in every entry; the app checks a
-  download against it before decoding anything.
-- **Checks.** The server decodes a published bundle within its size cap, parses the manifest
-  (refusing a plugin API it doesn't run), requires a version of 1 to 4 numbers that is newer than
-  the one kept, compiles the module without running it (only the sandbox's imports allowed) and
-  checks the asset names; the app checks the same again after the hash. Fetches share a budget of
-  bytes per second on the server, so many downloads at once are turned away instead of queued.
+Retired plugin distribution tags keep their binary positions and JSON names, but decoding them returns an explicit removal error. No directory requests or replies are processed.
 
 *Built* (open hosting: a server open to the public; running one: [`server.md`](server.md#running-a-public-server)):
 

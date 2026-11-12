@@ -1,6 +1,5 @@
 //! `figcraft-cli`: FigCraft without a window. Inspect, export, convert and render documents, run
-//! command scripts, list commands, serve MCP on stdio, publish plugins to a server's plugin
-//! directory, publish code connect mappings to a design file and measure performance.
+//! command scripts, list commands, serve MCP on stdio, publish code connect mappings to a design file and measure performance.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod args;
@@ -10,7 +9,7 @@ mod perf;
 use std::io::Write;
 use std::process::ExitCode;
 
-use args::{Cli, Command, ConnectCommand, PluginCommand, RootArgs};
+use args::{Cli, Command, ConnectCommand, RootArgs};
 use serde_json::{Value, json};
 
 /// The automation roots a file subcommand was given, if any. Omitting both leaves the run
@@ -92,7 +91,6 @@ fn run(cli: Cli) -> CliResult<ExitCode> {
         }
         // `--attach` conflicts with the roots: the app runs the commands, only its own roots can confine them.
         Command::Mcp(a) => mcp(a.attach.as_deref(), a.timeout, roots_of(&a.roots)?),
-        Command::Plugin { command: PluginCommand::Publish(a) } => publish_plugin(&a.folder, &a.server),
         Command::Connect { command: ConnectCommand::Publish(a) } => confined(&a.roots, || files::connect_publish(&a.file, &a.mappings, a.dry_run)),
         Command::Perf(a) => {
             let sizes: Vec<usize> = a.layers.into_iter().map(|n| n.clamp(10, 2_000_000)).collect();
@@ -123,29 +121,6 @@ fn commands(as_json: bool, filter: Option<&str>) {
         let undo = if c.history { "*" } else { "" };
         let _ = writeln!(out, "{}{undo}  {}{sc}\n    {}", c.id, c.label, c.params);
     }
-}
-
-/// Publish the plugin folder `folder` to the plugin directory at `server` (the key from the address
-/// or `FIGCRAFT_SERVER_KEY`); never prints the key.
-fn publish_plugin(folder: &str, server: &str) -> CliResult<ExitCode> {
-    let address = server.split('?').next().unwrap_or_default().to_string();
-    let server = match std::env::var("FIGCRAFT_SERVER_KEY") {
-        Ok(key) if !server.contains("key=") && !key.trim().is_empty() => format!("{address}?key={}", key.trim()),
-        _ => server.to_string(),
-    };
-    let mut h = figcraft_mcp::Headless::new();
-    use figcraft_mcp::Backend as _;
-    let r = h.call("engine.execute", json!({"command": "plugin.directory.publish", "params": {"path": folder, "server": server}}))?;
-    let e = &r["published"];
-    println!(
-        "Published {} {} ({}) to {address}: {} bytes, SHA-256 {}",
-        e["name"].as_str().unwrap_or_default(),
-        e["version"].as_str().unwrap_or_default(),
-        e["id"].as_str().unwrap_or_default(),
-        e["bytes"],
-        e["sha256"].as_str().unwrap_or_default()
-    );
-    Ok(ExitCode::SUCCESS)
 }
 
 fn mcp(attach: Option<&str>, timeout: Option<u64>, roots: Option<figcraft_engine::file_access::Roots>) -> CliResult<ExitCode> {

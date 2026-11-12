@@ -477,9 +477,8 @@ impl Client {
                 self.rejoin(seq, catch_up, &processed, peers, recompute)
             }
             ServerMsg::Refused { reason } => Err(Error::Protocol(reason)),
-            ServerMsg::Admin(_) | ServerMsg::Library(_) | ServerMsg::Plugins(_) => {
-                Err(Error::Protocol("an answer meant for a managing, library or plugin directory connection".into()))
-            }
+            ServerMsg::RetiredPlugins(_) => Err(Error::Protocol("plugin distribution has been removed; use the Craft plugin manager".into())),
+            ServerMsg::Admin(_) | ServerMsg::Library(_) => Err(Error::Protocol("an answer meant for a managing or library connection".into())),
         }
     }
 

@@ -203,8 +203,6 @@ fn fuzzed_frames_dont_hurt_the_server() {
             have: None,
             usage: Some(message::Usage { file: "Fuzz".into(), components: vec![(NodeId(1), 2)] }),
         }),
-        ClientMsg::OpenPlugins(message::OpenPlugins { protocol: message::PROTOCOL, key: String::new(), client_version: String::new() }),
-        ClientMsg::Plugins(message::PluginReq::List { query: "tiny".into() }),
         ClientMsg::OpenHosting(message::OpenHosting {
             protocol: message::PROTOCOL,
             client_version: String::new(),
@@ -225,10 +223,6 @@ fn fuzzed_frames_dont_hurt_the_server() {
         ClientMsg::Admin(Admin::Listing),
         ClientMsg::Admin(Admin::Block { ip: "203.0.113.1".into() }),
         ClientMsg::Report { reason: "fuzz".into() },
-        ClientMsg::Plugins(message::PluginReq::Fetch { id: "org.example.tiny".into(), version: None }),
-        ClientMsg::Plugins(message::PluginReq::Publish {
-            bundle: vec![0; 16],
-        }),
         ClientMsg::Ping,
     ]
     .iter()

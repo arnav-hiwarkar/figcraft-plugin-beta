@@ -90,7 +90,7 @@ native speakers' reviews of the nine language drafts need people.
 | Dev Mode / inspect | 98% | 78% | 1–2 | [dev-mode-parity](docs/dev-mode-parity.md) |
 | Comments, versions, misc | 87% | 63% | 1–3 | [collaboration-parity](docs/collaboration-parity.md) |
 | Multiplayer & sharing | 17% | 5% | 42–84 | [collaboration-parity](docs/collaboration-parity.md) |
-| Plugins & widgets | 65% | 38% | 6–22 | [plugins](docs/plugins.md) |
+| Plugins & widgets | 0% | 0% | TBD | [migration](docs/plugin-migration.md); legacy runtime removed, shared adapter inactive |
 | Team libraries | 70% | 40% | 4–8 | [components-parity](docs/components-parity.md) |
 | Figma Draw extras | 88% | 60% | 1–3 | [gaps](docs/gaps.md) |
 | AI features | 0% | 0% | 30–60 | [gaps](docs/gaps.md) |

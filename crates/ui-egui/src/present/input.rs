@@ -1,5 +1,4 @@
 use super::actions::find_trigger;
-use super::chrome::layer_at;
 use super::layout::{Layout, Place, hotspots};
 use super::navigate::next_delay;
 use super::scroll::{COAST_MIN, DECAY_DRAG, DECAY_WHEEL, RUBBER_PTS, clamp_scroll, page_settings, rubber_band, scrollers_at, units_per_point};
@@ -341,13 +340,6 @@ pub(super) fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, mode: In
             if let Some((id, k, r)) = pick(&|t| *t == Trigger::OnClick)
                 && p.fire(id, k, Some(r), now)
             {
-                return;
-            }
-            // A widget's clickable part calls its plugin back (after the frame, with the session).
-            if let Some(q) = pos
-                && let Some(t) = layer_at(doc, root, &place, q).and_then(|hit| figcraft_engine::widgets::target_at(doc, hit, place.page(q)))
-            {
-                p.widget_clicks.push(t);
                 return;
             }
             // Clicking where nothing reacts flashes the hotspots.

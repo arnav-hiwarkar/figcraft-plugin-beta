@@ -4,7 +4,7 @@ use super::error::{EngineError, Result, bad};
 use super::prefs::{Clipboard, Prefs, UiRequest};
 use super::{
     Arc, BatchScope, BatchStep, CommandSpec, Document, Node, NodeId, Session, Value, background, board, branches, cmd, components, events,
-    figcraft_collab, find_command, guard, json, library, live, params, plugins, textpreview, tools,
+    figcraft_collab, find_command, guard, json, library, live, params, textpreview, tools,
 };
 
 mod access;

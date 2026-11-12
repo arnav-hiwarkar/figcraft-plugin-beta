@@ -1,4 +1,4 @@
-use super::{Arc, Clipboard, DocState, Document, Prefs, Session, background, cmd, events, library, live, plugins, tools};
+use super::{Arc, Clipboard, DocState, Document, Prefs, Session, background, cmd, events, library, live, tools};
 
 impl Session {
     /// A session with one new document.
@@ -27,7 +27,6 @@ impl Session {
             last_command: None,
             message: None,
             libraries: library::Cache::default(),
-            plugins: plugins::Runtime::default(),
             live: live::Lives::default(),
             background: background::Background::default(),
             events: Arc::new(events::EventLog::default()),

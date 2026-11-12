@@ -272,9 +272,6 @@ fn finish(app: &mut FigApp, p: &mut Presenter) {
             p.press = None;
         }
     }
-    if let Some(e) = p.click_widgets(&app.session) {
-        app.toast(e);
-    }
 }
 
 /// Open `url` as its Open link action says: in a new tab, or in place of the prototype where the

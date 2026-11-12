@@ -9,7 +9,6 @@ pub enum PaletteTab {
     #[default]
     All,
     Assets,
-    Plugins,
 }
 
 /// The Actions palette's content height (the frame adds its own 8 px margins).
@@ -29,7 +28,7 @@ pub fn toggle_palette(ui: &mut crate::UiState) {
     set_palette(ui, open);
 }
 
-/// The Actions palette: search over commands, assets and plugins, with tabs, recents and grouped
+/// The Actions palette: search over commands, assets, with tabs, recents and grouped
 /// sections, floating above the toolbar. Rows run on click; Up and Down move the highlight and
 /// Enter runs the highlighted row.
 pub(super) fn palette(app: &mut FigApp, ctx: &egui::Context) {
@@ -86,8 +85,8 @@ pub(super) fn palette(app: &mut FigApp, ctx: &egui::Context) {
                     app.ui.palette_hi = 0;
                 }
                 ui.add_space(4.0);
-                // Tabs: All, Assets, Plugins & widgets.
-                let tabs = [(PaletteTab::All, tr("All")), (PaletteTab::Assets, tr("Assets")), (PaletteTab::Plugins, tr("Plugins & widgets"))];
+                // Tabs: All and Assets.
+                let tabs = [(PaletteTab::All, tr("All")), (PaletteTab::Assets, tr("Assets"))];
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
                     for (tab, label) in tabs {
@@ -154,7 +153,7 @@ pub(super) fn palette(app: &mut FigApp, ctx: &egui::Context) {
 }
 
 /// The rows a palette tab shows for the query, by section: All has Recents, the commands by menu,
-/// then plugins and widgets; Assets this file's components and styles; Plugins & widgets those.
+/// and Assets shows this file's components and styles.
 pub(crate) fn palette_sections(app: &FigApp, q: &str, tab: PaletteTab) -> Vec<(String, Vec<ActionRow>)> {
     let mut out = match tab {
         PaletteTab::All => {
@@ -164,30 +163,17 @@ pub(crate) fn palette_sections(app: &FigApp, q: &str, tab: PaletteTab) -> Vec<(S
             out
         }
         PaletteTab::Assets => asset_sections(app, q),
-        PaletteTab::Plugins => Vec::new(),
     };
-    if tab != PaletteTab::Assets {
-        out.push((tr("Plugins").to_string(), plugin_rows(app, q)));
-        out.push((tr("Widgets").to_string(), widget_rows(app, q)));
-    }
     out.retain(|(_, rows)| !rows.is_empty());
     out
 }
 
-/// Run a palette row: `command:<id>`, `plugin:<plugin>/<command>`, `widget:<plugin>`,
+/// Run a palette row: `command:<id>`,
 /// `component:<node>` or `style:<id>`.
 pub(crate) fn run_action(app: &mut FigApp, key: &str) {
     if let Some(id) = key.strip_prefix("command:") {
         record_recent(app, key);
         invoke(app, id);
-    } else if let Some(rest) = key.strip_prefix("plugin:") {
-        if let Some((plugin, command)) = rest.split_once('/') {
-            record_recent(app, key);
-            crate::plugins_ui::start(app, plugin, command);
-        }
-    } else if let Some(plugin) = key.strip_prefix("widget:") {
-        record_recent(app, key);
-        app.run("widget.insert", json!({ "plugin": plugin }));
     } else if let Some(node) = key.strip_prefix("component:") {
         if let Ok(n) = node.parse::<u64>() {
             let (cx, cy) = app.session.ds().map(|d| (d.view.cx, d.view.cy)).unwrap_or((0.0, 0.0));
@@ -271,8 +257,7 @@ const MAX_HITS: usize = 60;
 /// catalog order; a search covers every command (the engine's and the UI's own, "Other" for those
 /// no menu lists, except those that need parameters or read like a menu item), best matches first
 /// (labels starting with the query, then the shortest), each group placed by its best row. Labels
-/// match in the UI language and in English. The Plugins menu's items come with the plugins
-/// ([`plugin_rows`]).
+/// match in the UI language and in English.
 pub(crate) fn command_sections(q: &str) -> Vec<(String, Vec<ActionRow>)> {
     let ql = q.trim().to_lowercase();
     let mut menu_of = std::collections::HashMap::new();
@@ -295,9 +280,6 @@ pub(crate) fn command_sections(q: &str) -> Vec<(String, Vec<ActionRow>)> {
         }
         let menu = menu_of.get(id);
         let group = menu.map(|m| m.menu.split('/').next().unwrap_or(m.menu));
-        if group == Some("Plugins") {
-            continue;
-        }
         let label = match menu {
             Some(m) => i18n::menu_item(id, m.label),
             None => i18n::command(id, english),
@@ -332,53 +314,6 @@ fn same_label(label: &str) -> String {
     label.trim().trim_end_matches(['…', '.']).trim_end().to_lowercase()
 }
 
-/// Installed plugins' commands, filtered by the query.
-fn plugin_rows(app: &FigApp, q: &str) -> Vec<ActionRow> {
-    let ql = q.to_lowercase();
-    let mut rows = Vec::new();
-    for p in &app.session.prefs.plugins {
-        let m = &p.manifest;
-        for c in &m.commands {
-            let label = if m.commands.len() == 1 { m.name.clone() } else { format!("{} — {}", m.name, c.label) };
-            if !matches(&ql, &label, &m.id) {
-                continue;
-            }
-            rows.push(ActionRow {
-                key: format!("plugin:{}/{}", m.id, c.id),
-                label,
-                hint: if c.params.is_empty() { tr("Plugin").to_string() } else { c.label.clone() },
-                tile: m.name.chars().next(),
-            });
-        }
-    }
-    // The Plugins menu's own items (run last, manage, import).
-    for m in MENU.iter().filter(|m| m.label != SEP && m.menu.split('/').next() == Some("Plugins") && available(m.id)) {
-        let label = i18n::menu_item(m.id, m.label);
-        if matches(&ql, &label, &format!("{} {}", m.label, m.id)) {
-            rows.push(command_row(m.id, label.into_owned()));
-        }
-    }
-    rows
-}
-
-/// Installed widgets, filtered by the query.
-fn widget_rows(app: &FigApp, q: &str) -> Vec<ActionRow> {
-    let ql = q.to_lowercase();
-    app.session
-        .prefs
-        .plugins
-        .iter()
-        .filter(|p| p.manifest.widget)
-        .filter(|p| matches(&ql, &p.manifest.name, &p.manifest.id))
-        .map(|p| ActionRow {
-            key: format!("widget:{}", p.manifest.id),
-            label: p.manifest.name.clone(),
-            hint: tr("Widget").to_string(),
-            tile: p.manifest.name.chars().next(),
-        })
-        .collect()
-}
-
 /// This file's components and styles, filtered by the query.
 fn asset_sections(app: &FigApp, q: &str) -> Vec<(String, Vec<ActionRow>)> {
     let ql = q.to_lowercase();
@@ -404,7 +339,7 @@ fn asset_sections(app: &FigApp, q: &str) -> Vec<(String, Vec<ActionRow>)> {
 }
 
 /// A recent action back as a row (gone commands, plugins or assets drop out).
-pub(crate) fn recent_row(app: &FigApp, key: &str, q: &str) -> Option<ActionRow> {
+pub(crate) fn recent_row(_app: &FigApp, key: &str, q: &str) -> Option<ActionRow> {
     let ql = q.to_lowercase();
     if let Some(id) = key.strip_prefix("command:") {
         let spec = figcraft_engine::find_command(id);
@@ -415,28 +350,6 @@ pub(crate) fn recent_row(app: &FigApp, key: &str, q: &str) -> Option<ActionRow> 
             return None;
         }
         return Some(command_row(id, label.into_owned()));
-    }
-    if let Some(rest) = key.strip_prefix("plugin:") {
-        let (pid, cid) = rest.split_once('/')?;
-        let p = app.session.prefs.plugins.iter().find(|p| p.manifest.id == pid)?;
-        let c = p.manifest.commands.iter().find(|c| c.id == cid)?;
-        let label = if p.manifest.commands.len() == 1 { p.manifest.name.clone() } else { format!("{} — {}", p.manifest.name, c.label) };
-        if !matches(&ql, &label, pid) {
-            return None;
-        }
-        return Some(ActionRow { key: key.to_string(), label, hint: tr("Plugin").to_string(), tile: p.manifest.name.chars().next() });
-    }
-    if let Some(pid) = key.strip_prefix("widget:") {
-        let p = app.session.prefs.plugins.iter().find(|p| p.manifest.id == pid && p.manifest.widget)?;
-        if !matches(&ql, &p.manifest.name, pid) {
-            return None;
-        }
-        return Some(ActionRow {
-            key: key.to_string(),
-            label: p.manifest.name.clone(),
-            hint: tr("Widget").to_string(),
-            tile: p.manifest.name.chars().next(),
-        });
     }
     None
 }

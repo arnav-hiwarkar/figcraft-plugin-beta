@@ -65,27 +65,6 @@ fn dev_mode_keys_refuse_design_edits_and_say_why() {
     assert_eq!(x(&u), Some(21.0));
 }
 
-#[test]
-fn read_only_plugins_run_from_the_inspect_tab_show_their_panel() {
-    use base64::Engine as _;
-    let wasm = base64::engine::general_purpose::STANDARD.encode(crate::plugin_panel_tests::panel_module());
-    let manifest = json!({"id": "org.test.inspect", "name": "Inspect panel", "main": "p.wasm", "api": 2, "permissions": {"access": "read"}});
-    let mut s = Session::new();
-    s.execute("plugin.import", &json!({"manifest": manifest, "wasm": wasm})).unwrap();
-    let mut u = Ui::new(s);
-    u.app.ui.right_tab = crate::RightTab::Inspect;
-    u.frame(vec![]);
-    // What the Inspect tab's Plugins row runs.
-    crate::plugins_ui::start(&mut u.app, "org.test.inspect", "run");
-    u.frame(vec![]);
-    assert_eq!(u.app.session.plugins.panels.len(), 1, "its panel shows");
-    // Its callbacks only read: the button that would draw is refused and the design stays.
-    let layers = |u: &Ui| u.app.session.doc().unwrap().ids().count();
-    let before = layers(&u);
-    assert!(u.app.session.execute("plugin.event", &json!({"id": "org.test.inspect", "control": "go"})).is_err());
-    assert_eq!(layers(&u), before);
-}
-
 /// A clipboard holding only text.
 struct TextClip(String);
 

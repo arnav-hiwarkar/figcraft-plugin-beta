@@ -83,14 +83,3 @@ fn placed_images_are_capped_at_what_a_document_takes() {
         refused(&mut s, "image.place", json!({"path": "/dev/zero"}), DEVICE);
     }
 }
-
-#[test]
-fn fonts_and_plugins_are_refused_as_folders() {
-    let d = Dir::new("plugins");
-    let mut s = Session::new();
-    refused(&mut s, "text.loadFont", json!({"path": d.p("folder")}), FOLDER);
-    // A plugin folder whose manifest is a folder.
-    std::fs::create_dir_all(d.0.join("plugin").join("figcraft-plugin.json")).unwrap();
-    refused(&mut s, "plugin.import", json!({"path": d.p("plugin")}), FOLDER);
-    assert!(s.prefs.plugins.is_empty());
-}

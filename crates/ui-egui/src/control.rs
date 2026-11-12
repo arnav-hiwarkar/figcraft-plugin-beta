@@ -1183,7 +1183,7 @@ fn ui_set_view(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<(), String>
     if let Some(h) = p.get("palette").and_then(Value::as_bool) {
         crate::menus::set_palette(&mut app.ui, h);
     }
-    // true / false, or a top-level menu to open it at ("Plugins").
+    // true / false, or a top-level menu to open it at ("File").
     match p.get("mainMenu") {
         Some(Value::Bool(h)) => app.ui.main_menu = *h,
         Some(Value::String(top)) => {
@@ -1195,30 +1195,7 @@ fn ui_set_view(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<(), String>
     Ok(())
 }
 
-fn ui_set_plugins(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<(), String> {
-    if let Some(h) = p.get("pluginsWindow").and_then(Value::as_bool) {
-        app.ui.plugins_window = h;
-    }
-    // The Plugins window's tab ("installed", "browse"), and the plugin of the listed
-    // directory whose install asks for confirmation (null: none).
-    if let Some(tab) = p.get("pluginsTab").and_then(Value::as_str) {
-        app.ui.plugins_manage.tab = if tab == "browse" { crate::plugins_ui::PluginsTab::Browse } else { crate::plugins_ui::PluginsTab::Installed };
-    }
-    match p.get("pluginConfirm") {
-        Some(Value::String(id)) => app.ui.plugins_manage.confirm = Some(id.clone()),
-        Some(Value::Null) => app.ui.plugins_manage.confirm = None,
-        _ => {}
-    }
-    // A plugin command's parameters form: {id, command?}; null closes it.
-    match p.get("pluginForm") {
-        Some(Value::Null) => app.ui.plugin_form = None,
-        Some(v @ Value::Object(_)) => {
-            let id = v.get("id").and_then(Value::as_str).ok_or("pluginForm: {id, command?}")?;
-            let command = v.get("command").and_then(Value::as_str).unwrap_or_default();
-            crate::plugins_ui::start(app, id, command);
-        }
-        _ => {}
-    }
+fn ui_set_navigation(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<(), String> {
     // Give a region the keyboard as F6 would: toolbar, layers, canvas or properties.
     if let Some(r) = p.get("focusRegion").and_then(Value::as_str) {
         app.ui.nav.go(crate::a11y::Region::parse(r).ok_or_else(|| format!("unknown region `{r}`"))?);
@@ -1528,7 +1505,7 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
         }
         "ui.set" => {
             ui_set_view(app, ctx, p)?;
-            ui_set_plugins(app, ctx, p)?;
+            ui_set_navigation(app, ctx, p)?;
             ui_set_comments(app, ctx, p)?;
             ui_set_panels(app, ctx, p)?;
             ui_set_styles(app, p)?;

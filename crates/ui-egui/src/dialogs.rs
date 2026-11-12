@@ -33,7 +33,6 @@ pub mod branch_ui;
 pub mod credits;
 pub mod import_report;
 pub mod missing_fonts;
-pub mod plugins_ui;
 pub mod sampled_color;
 pub mod updates_ui;
 pub mod variables_panel;
@@ -208,7 +207,7 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
 
 /// Draw the app's dialogs and cards: pending opens/imports/missing fonts, About,
 /// Preferences, shortcuts, find/replace, batch rename, menu input, variables, dev compare,
-/// branch, export preview, colour profile, plugin, live join/publish, online dialogs and
+/// branch, export preview, colour profile, live join/publish, online dialogs and
 /// close confirmation.
 pub fn show(app: &mut FigApp, ctx: &Context) {
     // Dropped files waiting to open: their card, then (once it has shown) the files.
@@ -406,7 +405,6 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
         export_dialog(app, ctx);
     }
     color_profile_dialog(app, ctx);
-    crate::plugins_ui::show(app, ctx);
     crate::live::join_dialog(app, ctx);
     crate::live::publish_dialog(app, ctx);
     crate::online::dialogs(app, ctx);

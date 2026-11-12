@@ -64,7 +64,6 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 craft-menu = { workspace = true }
 
 [dev-dependencies]
-wat = { workspace = true }
 
 [build-dependencies]
 winresource = "0.1"

@@ -1,6 +1,6 @@
 use super::{
-    Access, Admin, AdminReply, Arc, ClientMsg, Code, Document, HostInfo, IpAddr, LibraryReply, LibraryReq, NO_TEAM_LIBRARIES, Peer, PluginReply,
-    PluginReq, Presence, Resume, Serialize, ServerMsg, Signal, code,
+    Access, Admin, AdminReply, Arc, ClientMsg, Code, Document, HostInfo, IpAddr, LibraryReply, LibraryReq, NO_TEAM_LIBRARIES, Peer, Presence, Resume,
+    Serialize, ServerMsg, Signal, code,
 };
 
 /// The server files are shared through online unless Preferences name another: the only place
@@ -316,13 +316,10 @@ pub enum Event {
     },
 }
 
-/// A request to a server outside a live session: its plugin directory, a team library, or keeping
+/// A request to a server outside a live session: a team library, or keeping
 /// a file there.
 #[derive(Clone, Debug)]
 pub enum NetRequest {
-    /// To the plugin directory of the server at `server` (`ws://host:port/`, with `?key=…` to
-    /// publish).
-    Plugins { server: String, req: PluginReq },
     /// About the team library of the file behind share link `link`.
     Library { link: String, req: LibraryReq },
     /// Keep a file on a server without joining it ([`LiveLink::upload`]).
@@ -340,7 +337,6 @@ impl NetRequest {
     /// What a session without the network says.
     pub(crate) fn unavailable(&self) -> &'static str {
         match self {
-            NetRequest::Plugins { .. } => crate::plugin_directory::NO_DIRECTORY,
             NetRequest::Library { .. } | NetRequest::Upload(_) => NO_TEAM_LIBRARIES,
             NetRequest::Hosting { .. } | NetRequest::Share { .. } => NO_HOSTING,
         }
@@ -349,7 +345,6 @@ impl NetRequest {
     /// How to answer that this request failed (and why).
     pub fn failure(&self) -> fn(String) -> NetReply {
         match self {
-            NetRequest::Plugins { .. } => |why| NetReply::Plugins(Err(why)),
             NetRequest::Library { .. } => |why| NetReply::Library(Err(why)),
             NetRequest::Upload(_) => |why| NetReply::Upload(Err(why)),
             NetRequest::Hosting { .. } => |why| NetReply::Hosting(Err(why)),
@@ -362,7 +357,6 @@ impl NetRequest {
     pub(crate) fn stands_for(&self, other: &NetRequest) -> bool {
         use std::mem::discriminant;
         match (self, other) {
-            (NetRequest::Plugins { server: a, req: x }, NetRequest::Plugins { server: b, req: y }) => a == b && discriminant(x) == discriminant(y),
             (NetRequest::Library { link: a, req: x }, NetRequest::Library { link: b, req: y }) => a == b && discriminant(x) == discriminant(y),
             (NetRequest::Upload(a), NetRequest::Upload(b)) => a.server == b.server,
             (NetRequest::Hosting { server: a, file: f, req: x, .. }, NetRequest::Hosting { server: b, file: g, req: y, .. }) => {
@@ -379,7 +373,6 @@ impl NetRequest {
 /// The answer to a [`NetRequest`] (an error: the server couldn't be reached or refused).
 #[derive(Clone, Debug, PartialEq)]
 pub enum NetReply {
-    Plugins(std::result::Result<PluginReply, String>),
     Library(std::result::Result<LibraryReply, String>),
     /// The new links, when some were asked for.
     Share(std::result::Result<Option<Shared>, String>),
@@ -478,12 +471,6 @@ pub trait LiveLink: Send {
     /// Send library requests `(link, request)` in the background, in order; each answer arrives as
     /// [`Event::Library`]. Ignored while an earlier call's requests are still out.
     fn library_background(&mut self, _jobs: Vec<(String, LibraryReq)>) {}
-    /// One request to the plugin directory of the server at `server` (`ws://host:port/`, with
-    /// `?key=…` to publish); waits for the answer (a few seconds at most when it can't be
-    /// reached). Errors never echo the key.
-    fn plugins(&mut self, _server: &str, _req: PluginReq) -> std::result::Result<PluginReply, String> {
-        Err(crate::plugin_directory::NO_DIRECTORY.into())
-    }
     /// What the server at `server` says about its hosting, and with a file's owner token
     /// (`file` and `owner`) its answer to `req` about that file; waits for the server. Errors
     /// never echo the token.
@@ -504,7 +491,6 @@ pub trait LiveLink: Send {
     fn request(&mut self, req: NetRequest) -> NetReply {
         match req {
             NetRequest::Share { server, file, owner, revoke, create } => NetReply::Share(self.share(&server, &file, &owner, &revoke, create)),
-            NetRequest::Plugins { server, req } => NetReply::Plugins(self.plugins(&server, req)),
             NetRequest::Library { link, req } => NetReply::Library(self.library(&link, req)),
             NetRequest::Upload(o) => NetReply::Upload(self.upload(o)),
             NetRequest::Hosting { server, file, owner, req } => NetReply::Hosting(self.hosting(&server, &file, &owner, req)),

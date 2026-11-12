@@ -109,7 +109,7 @@ them and confine nothing.
 
 Not confined: opening the files given on the command line when the app starts and the documents
 the system hands over (Finder, Open With; saving them later is confined like any write), and the
-app's own folders (preferences, recovery copies, plugins installed from a plugin directory). Run `figcraft-cli mcp --attach PORT` without the flags against
+app's own folders (preferences and recovery copies). Run `figcraft-cli mcp --attach PORT` without the flags against
 such an app (it refuses them: the app does the confining). `ui.screenshot` and `ui.render` without a
 `path` return the PNG as data, which is how the attached MCP server takes them, so it writes no
 temporary files.
@@ -344,17 +344,13 @@ separate calls. Returns `{queued}`.
 
 Invoke a menu item exactly like clicking it (this may open a dialog). Returns `{ok, lastError}`.
 
-### `ui.set {rightTab?, leftTab?, theme?, home?, homeSection?, homeSearch?, homeRecentsView?, homeRecentsSort?, homeRecentsOrder?, palette?, mainMenu?, focusRegion?, colorPicker?, variables?, layerFilter?, collapseLayers?, exportPreview?, preview?, presentScroll?, colorProfileDialog?, stylePicker?, stylePickerEdit?, stylePickerView?, iconGallery?, protoEditor?, contextMenu?, contextSelectLayer?, commentOpen?, commentDraft?, commentFilter?, commentSort?, commentSearch?, commentReply?, commentEdit?, presentComments?, devCompare?, devCompareMode?, devCompareSplit?, annotationFilter?, resetFrameStats?, pluginsWindow?, pluginsTab?, pluginConfirm?, pluginForm?, devCompareVersion?}`
+### `ui.set {rightTab?, leftTab?, theme?, home?, homeSection?, homeSearch?, homeRecentsView?, homeRecentsSort?, homeRecentsOrder?, palette?, mainMenu?, focusRegion?, colorPicker?, variables?, layerFilter?, collapseLayers?, exportPreview?, preview?, presentScroll?, colorProfileDialog?, stylePicker?, stylePickerEdit?, stylePickerView?, iconGallery?, protoEditor?, contextMenu?, contextSelectLayer?, commentOpen?, commentDraft?, commentFilter?, commentSort?, commentSearch?, commentReply?, commentEdit?, presentComments?, devCompare?, devCompareMode?, devCompareSplit?, annotationFilter?, resetFrameStats?, devCompareVersion?}`
 
 Switch panels and modes: `rightTab` `design|prototype|inspect`, `leftTab` `file|assets`, `theme`,
 `home` (bool), `homeSection` (`recents`, `online` or `templates`: which section the home screen shows, as `ui.inspect` reports it; opening
 `online` asks each server once what became of your online files), `homeRecentsView` (`grid|list`), `homeRecentsSort` (`modified|name|created`) and `homeRecentsOrder` (`desc|asc`): how the home screen shows its recent files (kept in the preferences; `ui.inspect` reports them under `homeRecents` with each file and whether its picture is in), `palette` (bool: the Actions palette), `mainMenu` (bool, or a top-level menu such
-as `"Plugins"` to open the main menu with it open), `homeSearch` (text, at most 256 characters: filters locally known open, recent and online files plus starter templates in Home; an empty string returns to the selected section),
-`pluginsWindow` (bool: Plugins ▸ Manage
-plugins…), `pluginsTab` (`installed|browse`: that window's tab), `pluginConfirm` (a plugin id of the
-directory listed last: its install confirmation shows, as its Install button would; `null` closes
-it), `pluginForm` (`{id, command?}`: start that plugin command like its menu item, opening
-its parameters form when it has parameters; `null` closes the form), `focusRegion`
+as `"File"` to open the main menu with it open), `homeSearch` (text, at most 256 characters: filters locally known open, recent and online files plus starter templates in Home; an empty string returns to the selected section),
+`focusRegion`
 (`toolbar|layers|canvas|properties`: give that region the keyboard as F6 would, on the next frame),
 `iconGallery` (bool:
 every UI icon at 12, 16, 24 and 32 px over the window, for reviewing the icon set), `colorPicker`

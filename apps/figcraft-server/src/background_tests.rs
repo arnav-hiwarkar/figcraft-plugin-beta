@@ -52,11 +52,11 @@ fn a_server_that_never_answers_holds_nothing_up() {
     let server = format!("ws://{}/", hole.local_addr().unwrap());
     let mut s = session("Cy");
     let started = Instant::now();
-    assert_eq!(s.start_background("plugin.directory.list", json!({"server": server})).unwrap(), None);
+    assert_eq!(s.start_background("collab.serverInfo", json!({"server": server})).unwrap(), None);
     assert!(started.elapsed() < Duration::from_secs(1), "the caller didn't wait");
-    assert!(s.waiting_for("plugin.directory.list"));
+    assert!(s.waiting_for("collab.serverInfo"));
     // Closing the window stops waiting; the answer, when the request gives up, is dropped.
-    s.cancel_background("plugin.directory.list");
-    assert!(!s.waiting_for("plugin.directory.list") && s.take_background_done().is_none());
+    s.cancel_background("collab.serverInfo");
+    assert!(!s.waiting_for("collab.serverInfo") && s.take_background_done().is_none());
     drop(hole);
 }

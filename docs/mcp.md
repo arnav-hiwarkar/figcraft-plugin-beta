@@ -84,8 +84,7 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   `file.export`, `file.exportSvg`, `file.exportLayers` (and the folders it makes), `file.exportFramesPdf`, the images and variables JSON read next to an imported REST API
   file, `library.add` and the library files open documents link to, `variable.import` /
   `variable.export`, `codeConnect.import` / `codeConnect.export`, `component.playground {path}`,
-  `plugin.import {path}`, a development plugin's module read again from disk,
-  `plugin.directory.publish {path}` and its assets, `collab.recoverFile {path}`, and the headless
+  `collab.recoverFile {path}`, and the headless
   `ui.render` / `ui.screenshot` with a `path`.
 - **How paths are resolved:** a relative path is made absolute against the server's working
   directory, then its links are followed: the real path is what is compared and what is opened. For
@@ -96,18 +95,18 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   compared by whole names: `/work2/x` is not inside `/work`. On Windows the case comes from the disk (`C:\WORK\x` is
   inside `C:\work`), `\\?\` and UNC (`\\server\share\…`) paths are resolved like drive-letter ones,
   and new names that are devices (`CON`, `NUL`, `COM1`…) or streams (`a.png:x`) are refused.
-- **The network:** a confined call reaches no FigCraft or plugin server, so it can't send a
+- **The network:** a confined call reaches no FigCraft server, so it can't send a
   document anywhere through one. Hosting, joining, publishing and sharing a file (`collab.host`,
   `collab.join`, `collab.publish`, `collab.share` …), team libraries on a server (`library.check`
   refuses, and `library.updates` / `library.list` report the refusal for each instead of the last
-  version fetched) and plugin directories are refused with `automation roots are set: commands
+  version fetched)  are refused with `automation roots are set: commands
   don't reach the network …`. The app started with the flags confines its own window too, so its
   sharing is off as well. One exception: a root on a network share (a UNC path such as
   `\\server\share\…`, or a mounted network drive) is still a root, so reading and writing inside
   it reaches that file server, and saving there sends the document to it. Give only roots you would
   let the agent's files go to.
 - Not confined: the app's own folders, which no tool names (preferences, Data Recovery copies,
-  plugins installed from a plugin directory, the system fonts).
+  the system fonts).
 - `--attach` with either flag is a usage error: the app runs the commands, so only the app can
   confine them. Start it with the same flags, `figcraft --control 7979 --automation-read-root DIR
   --automation-write-root DIR` (see [Control protocol](control-protocol.md#confining-file-access)),
@@ -840,8 +839,7 @@ Alt, Shift and Cmd, all held and no others) or a controller button (`key: "Gamep
 followed by `A`, `B`, `X`, `Y`, `LB`, `RB`, `LT`, `RT`, `View`, `Menu`, `LS`, `RS`, `Up`, `Down`,
 `Left`, `Right` or `Home`: the standard layout, face buttons by position), which the player reads
 from controllers on Windows and in the browser and which the control channel presses with
-`ui.input {events: [{gamepad: "A"}]}`. Widgets react to clicks in the player, on its own copy of
-the file (see [plugins.md](plugins.md)). In the player, an "on drag" trigger with a move, push
+`ui.input {events: [{gamepad: "A"}]}`. Legacy widget layers remain visible but have no plugin interaction. In the player, an "on drag" trigger with a move, push
 or slide animation starts only for a drag that way, and the animation follows the pointer until it
 lets go; spring easings play until they settle (their duration follows from the spring, not
 `durationMs`); an overlay's after-delay timer starts when it opens; instances of a component play
@@ -1654,68 +1652,6 @@ only: a host stops hosting it, a guest leaves it.
   Preferences checkbox. Starting the app with an invite link (`figcraft "figcraft://join?…"`)
   joins that session.
 
-### Plugins
-
-Sandboxed WebAssembly plugins act through the same commands (see [`plugins.md`](plugins.md) for the
-manifest, the ABI and the Rust SDK). Driven with `run_command`: `plugin.import {path}` (a
-`figcraft-plugin.json` or its folder) or `plugin.import {manifest, wasm}` (the manifest as an
-object or JSON text and the module as base64, for this session only), `plugin.list`,
-`plugin.remove {id}`, and `plugin.run {id, command?, params?, fuel?}`, which returns
-`{plugin, command, output, logs, calls, fuel, panel}`. A run is one undo step and is rolled back when it
-fails; a plugin only reads the document unless its manifest asks for `write`, may be limited to
-some commands, and can never touch files, other documents, the undo history, dialogs or other
-plugins. A headless MCP session starts with no plugins: import them first. `plugins.runLast` runs
-the last plugin command again.
-
-A plugin that shows a panel (API 2) can be used headless too: `plugin.ui {id?}` returns plugin
-`id`'s open panel, or without `id` the one opened last (`{plugin, command, title, controls,
-values}`, or null; several plugins can have panels open at once), `plugin.event {id, control, value?}`
-presses a button or sets a field as a click would (the plugin is called back; one undo step;
-returns like `plugin.run`, with the updated `panel`), and `plugin.close {id}` ends the session.
-Plugin settings are kept per plugin with the preferences (in a headless session, for the session).
-
-```json
-{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"plugin.run","params":{"id":"org.figcraft.examples.swatch-grid","command":"panel"}}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"plugin.event","params":{"id":"org.figcraft.examples.swatch-grid","control":"palette","value":"Forest"}}}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"plugin.event","params":{"id":"org.figcraft.examples.swatch-grid","control":"generate"}}}}
-```
-
-Widgets (API 3 and 4, layers on the canvas a plugin draws) are driven the same way: `widget.insert
-{plugin, x?, y?}` puts one on the page (centred in the view without a position) and returns `{id,
-plugin, state, targets, output, logs, calls, fuel}`; `widget.click {id, target}` clicks one of its
-`targets` as a click on the canvas would (the plugin redraws it; one undo step; returns the same);
-`widget.list` lists every widget in the file with its plugin, page, state and targets. With plugin
-API 4 a widget can have editable text fields and a property menu (both listed with it, as `fields`
-and `menu`): `widget.setText {id, field, value}` sets a field as typing in it would (the value,
-at most 1,000 characters, goes into the state under the field's name and the plugin redraws; one
-undo step), and `widget.menu {id, item, value?}` uses a menu item (a toggle's `value` is `true` or
-`false`, by default the opposite of now; a colour's is one of its options). With API 5 a widget's
-callback can open its plugin's panel: `plugin.ui` shows it (`command` is `widget`) and
-`plugin.event` uses it, the plugin redrawing the widget in the same undo step. A widget's state is
-layer data, so it is saved, undone and synced with the file.
-
-```json
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"widget.insert","params":{"plugin":"org.figcraft.examples.counter"}}}}
-{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"widget.click","params":{"id":12,"target":"increment"}}}}
-{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"widget.list","params":{}}}}
-{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"widget.setText","params":{"id":12,"field":"label","value":"Votes"}}}}
-{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"widget.menu","params":{"id":12,"item":"big"}}}}
-```
-
-Plugins from a `figcraft-server`'s plugin directory ([`plugins.md`](plugins.md#plugin-directories)):
-`plugin.directory.list {server?, query?}` lists the latest version of each plugin with the
-permissions it asks for (`access`, `commands`), its size and SHA-256, and `installed` / `update`;
-`plugin.directory.install {id, version?, confirm: true, sha256?}` downloads it, checks the SHA-256 and
-installs it for the session (an agent must pass `confirm: true`, after showing its user the
-permissions: without it nothing is downloaded); `plugin.directory.publish {path | plugin, server}` and
-`plugin.directory.unpublish {id, version?, server}` need the server's key in `server`
-(`ws://host:port/?key=…`).
-
-```json
-{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"plugin.directory.list","params":{"server":"ws://127.0.0.1:47900/"}}}}
-{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"plugin.directory.install","params":{"id":"org.figcraft.examples.swatch-grid","confirm":true}}}}
-```
-
 ### Developer Mode
 
 - **Pages as React + Tailwind:** `inspect.code {id, language: "tailwind"}` writes a layer tree as a
@@ -1791,8 +1727,7 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   warning). `get_node` lists a component's links as `codeLinks`. In the app, the Inspect tab's
   Connect to code section edits them in the Code section's language, with a live preview and a
   Connected badge. An editor extension isn't needed: agents and editors read the same snippets
-  through this server. Plugins whose manifest asks only for `read` also run from the Inspect tab,
-  with their panels (`plugin.ui`); their callbacks can only read.
+  through this server. Legacy plugin panels in the Inspect tab have been removed.
 - **Dev resources:** links for developers (docs, code, tickets) on any layer, each a URL and a
   name. `devResource.add {id?, url, name?}` → `{id, index}` (no name: the URL without its scheme,
   `www.` and a trailing slash; no page title is looked up), `devResource.edit {id?, index, url?,

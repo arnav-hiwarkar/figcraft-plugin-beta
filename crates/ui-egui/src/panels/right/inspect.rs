@@ -192,7 +192,6 @@ pub(super) fn inspect(app: &mut FigApp, ui: &mut Ui) {
         crate::dev_mode::ready_list(app, ui);
         crate::dev_mode::categories_section(app, ui);
         crate::dev_mode::measurements_section(app, ui, &doc, &sel);
-        crate::dev_mode::plugins_section(app, ui);
         return;
     };
     // The layer's name on one line: a long one ends with an ellipsis and shows in full on hover (#1650).
@@ -278,5 +277,4 @@ pub(super) fn inspect(app: &mut FigApp, ui: &mut Ui) {
         app.toast(trf("Copied {value}", &[("value", &lang.label())]));
     }
     crate::dev_mode::connect_section(app, ui, &doc, first, lang);
-    crate::dev_mode::plugins_section(app, ui);
 }

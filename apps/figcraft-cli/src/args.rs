@@ -36,11 +36,6 @@ pub enum Command {
     Run(RunArgs),
     Commands(CommandsArgs),
     Mcp(McpArgs),
-    /// Publish plugins to a server's plugin directory
-    Plugin {
-        #[command(subcommand)]
-        command: PluginCommand,
-    },
     /// Publish a code repository's component mappings (code connect) to a design file
     Connect {
         #[command(subcommand)]
@@ -217,26 +212,6 @@ pub struct McpArgs {
 }
 
 #[derive(Subcommand)]
-pub enum PluginCommand {
-    Publish(PublishArgs),
-}
-
-/// Send a plugin folder to a figcraft-server's plugin directory as a new version
-///
-/// The folder holds figcraft-plugin.json, its module and an optional assets/ folder. The server's
-/// key comes from the address or the FIGCRAFT_SERVER_KEY environment variable (which keeps it out
-/// of the shell history); it is never printed.
-#[derive(Args)]
-pub struct PublishArgs {
-    /// The plugin folder
-    #[arg(value_name = "FOLDER")]
-    pub folder: String,
-    /// The server, ws://host:port/ (optionally ?key=KEY)
-    #[arg(long, value_name = "URL")]
-    pub server: String,
-}
-
-#[derive(Subcommand)]
 pub enum ConnectCommand {
     Publish(ConnectPublishArgs),
 }
@@ -341,7 +316,7 @@ pub fn parse(args: Vec<OsString>) -> Result<Cli, clap::Error> {
     }
 }
 
-/// The program name and the subcommands `args` names (`figcraft-cli plugin publish`): at each
+/// The program name and the subcommands `args` names (`figcraft-cli connect publish`): at each
 /// level, the first argument that isn't a flag, while it names a subcommand.
 fn subcommand_path(cmd: &clap::Command, args: &[OsString]) -> Vec<OsString> {
     let mut path: Vec<OsString> = args.first().cloned().into_iter().collect();
@@ -359,7 +334,7 @@ mod tests {
     use clap::CommandFactory;
     use clap::error::ErrorKind;
 
-    use super::{Cli, Command, ConnectCommand, PluginCommand, parse};
+    use super::{Cli, Command, ConnectCommand, parse};
 
     fn try_parse(args: &[&str]) -> Result<Cli, clap::Error> {
         parse(std::iter::once("figcraft-cli").chain(args.iter().copied()).map(Into::into).collect())
@@ -454,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_and_plugin_publish() {
+    fn mcp_and_connect_publish() {
         let Command::Mcp(a) = ok(&["mcp"]) else { panic!("mcp") };
         assert_eq!(a.attach, None);
         let Command::Mcp(a) = ok(&["mcp", "--attach", "7979"]) else { panic!("mcp") };
@@ -465,10 +440,6 @@ mod tests {
         assert_eq!(a.timeout, Some(300));
         let Command::Mcp(a) = ok(&["mcp", "--automation-read-root", "in", "--automation-write-root", "out"]) else { panic!("mcp") };
         assert_eq!((a.roots.automation_read_root, a.roots.automation_write_root), (vec!["in".to_owned()], vec!["out".to_owned()]));
-        let Command::Plugin { command: PluginCommand::Publish(a) } = ok(&["plugin", "publish", "dist/counter", "--server", "ws://h:47900/"]) else {
-            panic!("plugin")
-        };
-        assert_eq!((a.folder.as_str(), a.server.as_str()), ("dist/counter", "ws://h:47900/"));
         let Command::Connect { command: ConnectCommand::Publish(a) } = ok(&["connect", "publish", "ui.figcraft"]) else { panic!("connect") };
         assert_eq!((a.file.as_str(), a.mappings.as_str(), a.dry_run), ("ui.figcraft", "figcraft.connect.json", false));
         let Command::Connect { command: ConnectCommand::Publish(a) } =
@@ -521,14 +492,12 @@ mod tests {
             (&["mcp", "--automation-write-root"], InvalidValue),
             (&["mcp", "stray"], UnknownArgument),
             (&["convert", "a"], MissingRequiredArgument),
-            (&["plugin", "publish", "dist"], MissingRequiredArgument),
             (&["commands", "--filter", "--json"], InvalidValue),
         ];
         for (args, want) in cases {
             assert_eq!(kind(args), *want, "{args:?}");
             assert_eq!(try_parse(args).err().map(|e| e.exit_code()), Some(2), "{args:?}");
         }
-        assert_eq!(try_parse(&["plugin"]).err().map(|e| e.exit_code()), Some(2));
     }
 
     #[test]
@@ -544,15 +513,15 @@ mod tests {
             &["export", "-o", "--help"],
             &["mcp", "--attach", "notaport", "--help"],
             &["mcp", "--bogus", "-h"],
-            &["--no-system-fonts", "plugin", "publish", "--bogus", "--help"],
+            &["--no-system-fonts", "connect", "publish", "--bogus", "--help"],
         ] {
             let e = try_parse(args).err();
             assert_eq!(e.as_ref().map(clap::Error::kind), Some(ErrorKind::DisplayHelp), "{args:?}");
             assert_eq!(e.map(|e| e.exit_code()), Some(0), "{args:?}");
         }
         // The help is the subcommand's, even after a mistake.
-        let help = try_parse(&["plugin", "publish", "--bogus", "--help"]).err().map(|e| e.to_string()).unwrap_or_default();
-        assert!(help.contains("Usage: figcraft-cli plugin publish"), "{help}");
+        let help = try_parse(&["connect", "publish", "--bogus", "--help"]).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(help.contains("Usage: figcraft-cli connect publish"), "{help}");
         // After `--`, `-h` is a file name.
         let Command::Info(a) = ok(&["info", "--", "-h"]) else { panic!("info") };
         assert_eq!(a.file, "-h");

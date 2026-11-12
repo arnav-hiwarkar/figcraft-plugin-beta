@@ -547,15 +547,6 @@ fn open_connections_never_reach_what_needs_the_key() {
     assert!(matches!(&check[0], AdminReply::Listing(rows) if rows.iter().any(|r| r.info.id == other && r.info.name == "Team file")));
     assert!(matches!(&check[1], AdminReply::Links(links) if links.len() == 2));
     assert!(std::fs::read_to_string(dir.path().join("blocked.json")).is_err());
-    let e = manage::plugins(
-        &Endpoint::plain(addr.to_string()),
-        "",
-        figcraft_collab::message::PluginReq::Publish { bundle: vec![1, 2, 3] },
-        &NetLimits::default(),
-        Duration::from_secs(5),
-    )
-    .unwrap_err();
-    assert!(e.contains("distribution has been removed"), "{e}");
     // Open-mode answers never carry the server key.
     assert!(!format!("{info:?}").contains(&k));
     server.stop();

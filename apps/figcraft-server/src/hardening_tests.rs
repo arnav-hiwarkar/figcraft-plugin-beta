@@ -11,7 +11,7 @@ use std::net::{IpAddr, TcpListener};
 use std::time::{Duration, Instant};
 
 use figcraft_collab::message::{
-    Access, Admin, AdminReply, ClientMsg, LibraryReply, LibraryReq, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, ServerMsg, Usage,
+    Access, Admin, AdminReply, ClientMsg, LibraryReply, LibraryReq, OpenHosting, OpenLibrary, PROTOCOL, RetiredPluginMessage, ServerMsg, Usage,
 };
 use figcraft_collab::sim::Rng;
 use figcraft_collab::{Client, Limits, NoRecompute, Outgoing, Replica, Server};
@@ -332,7 +332,7 @@ fn messages_are_capped_by_what_the_connection_is_for() {
     let addr = server.addr();
     // The retired distribution handshake is refused before a request can be served.
     let mut raw = Raw::connect(addr);
-    raw.send(&ClientMsg::OpenPlugins(OpenPlugins { protocol: PROTOCOL, key: String::new(), client_version: String::new() }));
+    raw.send(&ClientMsg::RetiredOpenPlugins(RetiredPluginMessage));
     assert!(matches!(raw.next(), ServerMsg::Refused { reason } if reason.contains("distribution has been removed")));
     drop(raw);
     // A joined client whose batch is bigger than a file may be is told the limit.

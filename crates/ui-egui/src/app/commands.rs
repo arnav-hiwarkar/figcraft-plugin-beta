@@ -1,6 +1,6 @@
 use super::{
     Done, FigApp, LeftTab, MobilePanel, NodeId, PANEL_DEFAULT, RightTab, Value, comments, dev_compare, dialogs, home, import_report, json, layers,
-    live, menus, missing_fonts, plugins_ui, present, tabs, updates_ui, versions,
+    live, menus, missing_fonts, present, tabs, updates_ui, versions,
 };
 
 impl FigApp {
@@ -290,8 +290,6 @@ impl FigApp {
                         self.ui.close_tab = Some(crate::windows::TabClose::Ask(d.uid));
                     }
                 }
-                "dialog.plugins" => self.ui.plugins_window = true,
-                "dialog.pluginSave" => plugins_ui::save_file(self, &r.data),
                 "dialog.cursorChat" => live::open_chat(self),
                 "window.new" | "window.focus" | "window.fullscreen" => self.window_requests.push(r),
                 _ => {}

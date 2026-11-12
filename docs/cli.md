@@ -1,7 +1,7 @@
 # figcraft-cli
 
 FigCraft without a window: inspect, export, convert and render documents, run command scripts, list
-commands, serve MCP, publish plugins and code connect mappings, and measure performance. Build it with
+commands, serve MCP, publish code connect mappings, and measure performance. Build it with
 `cargo build --release -p figcraft-cli` (binary `target/release/figcraft-cli`).
 
 The CLI follows [RFC-0012](https://github.com/storytold/craft-contrib/blob/main/rfcs/0012-cli-conventions.md),
@@ -285,16 +285,7 @@ is confined by the app it attaches to, from the flags that app was started with.
 session can host, join and publish
 live sessions (`collab.*`: without a key on a server open to the public, with `collab.serverInfo`,
 `collab.manageFile` for the owner token and `collab.report`) and use plugin directories
-(`plugin.directory.*`); the one-shot `run` can't (no network link).
-
-### `plugin publish <folder> --server ws://host:port/[?key=KEY]`
-
-Publishes a plugin folder (`figcraft-plugin.json`, the module its `main` names, an optional `assets/`
-folder) to a `figcraft-server`'s plugin directory as a new version, and prints its name, version,
-size and SHA-256. The server's key comes from the address or, better, from the
-`FIGCRAFT_SERVER_KEY` environment variable (it then stays out of the shell history and process
-lists); it is never printed. The bundle is checked before it is sent and again by the server. See
-[plugins.md](plugins.md#plugin-directories).
+; the one-shot `run` has no network link.
 
 ### `connect publish <file.figcraft> [--mappings FILE] [--dry-run]`
 

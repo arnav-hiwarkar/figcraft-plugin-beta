@@ -3,8 +3,7 @@
 //! categories and the filter of the callouts, the handoff status of the selected frames (with the
 //! focus view and Compare changes), the list of frames and sections that are ready for dev, the
 //! focus view's bar, Connect to code (a component's link to its code component), dev resources
-//! (links for developers), measurements kept on the canvas and the plugins that only read the
-//! document.
+//! (links for developers), measurements kept on the canvas.
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_doc::{Annotation, AnnotationCategory, CodeLink, DevStatus, Document, NodeId};
@@ -13,7 +12,6 @@ use figcraft_engine::code_connect;
 use figcraft_engine::codegen::{CodeLang, code_for};
 use figcraft_engine::dev_measurements::{self, Placed};
 use figcraft_engine::devinspect::{self, DevItem, Prop};
-use figcraft_engine::plugins::Access;
 use figcraft_engine::snap::Guide;
 use figcraft_engine::{components, dev_resources};
 use serde_json::json;
@@ -495,48 +493,6 @@ pub fn connect_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId
             let names: Vec<&str> = names.iter().filter_map(serde_json::Value::as_str).collect();
             app.toast(trf("Not properties, kept as written: {names}", &[("names", &names.join(", "))]));
         }
-    }
-    ui.add_space(4.0);
-}
-
-/// Dev Mode plugins: the installed plugins that only read the document, run from the Inspect tab.
-pub fn plugins_section(app: &mut FigApp, ui: &mut Ui) {
-    let runnable: Vec<(String, String, String)> = app
-        .session
-        .prefs
-        .plugins
-        .iter()
-        .filter(|p| p.manifest.permissions.access == Access::Read)
-        .flat_map(|p| {
-            let m = &p.manifest;
-            m.commands.iter().map(move |c| {
-                let label = if m.commands.len() > 1 { format!("{} · {}", m.name, c.label) } else { m.name.clone() };
-                (m.id.clone(), c.id.clone(), label)
-            })
-        })
-        .collect();
-    if runnable.is_empty() {
-        return;
-    }
-    let t = Tokens::get(ui.ctx());
-    widgets::separator(ui);
-    widgets::section_header(ui, tr("Plugins"), &[], false);
-    let mut run = None;
-    for (id, command, label) in &runnable {
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
-        let resp = resp.tip(trf("Run {label}", &[("label", label)]));
-        if resp.hovered() {
-            ui.painter().rect_filled(r.shrink2(vec2(8.0, 0.0)), CornerRadius::same(5), t.hover);
-        }
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + PAD + 6.0, r.center().y), vec2(12.0, 12.0)), Icon::Actions, t.icon);
-        let name = widgets::elide(ui, label, r.width() - PAD * 2.0 - 20.0);
-        ui.painter().text(pos2(r.min.x + PAD + 20.0, r.center().y), Align2::LEFT_CENTER, name, regular(11.0), t.text);
-        if resp.clicked() {
-            run = Some((id.clone(), command.clone()));
-        }
-    }
-    if let Some((id, command)) = run {
-        crate::plugins_ui::start(app, &id, &command);
     }
     ui.add_space(4.0);
 }

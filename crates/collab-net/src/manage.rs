@@ -1,14 +1,12 @@
 //! Requests to a server outside a live session, each on a connection of its own answered in
 //! order: managing its files with the server's key ([`Manage`], [`request`]; the app publishes
 //! through it, and the server's command line uses it to reach a running server), and using a
-//! file's team library with one of the file's share links ([`OpenLibrary`], [`library`]), and its
-//! plugin directory ([`OpenPlugins`], [`plugins`]: anyone browses, the key publishes).
+//! file's team library with one of the file's share links ([`OpenLibrary`], [`library`]).
 
 use std::time::Duration;
 
 use figcraft_collab::message::{
-    self, Admin, AdminReply, ClientMsg, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, PluginReply,
-    PluginReq, ServerMsg,
+    self, Admin, AdminReply, ClientMsg, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, PROTOCOL, ServerMsg,
 };
 use figcraft_engine::live::Shared;
 use tungstenite::{Bytes, Message, WebSocket};
@@ -146,31 +144,6 @@ pub fn library(link: &str, req: LibraryReq, limits: &NetLimits, timeout: Duratio
     }
     send(&mut ws, &ClientMsg::Library(req))?;
     let r = reply(&mut ws, limits, lib)?;
-    close(ws);
-    Ok(r)
-}
-
-/// Send one request to the plugin directory of the server at `server`, with its `key` (empty: only
-/// browsing); the reply. Fails when the server can't be reached, refuses the key or has no
-/// directory (an older server); a request it can't do is a [`PluginReply::Failed`] reply. Never
-/// echoes the key.
-pub fn plugins(server: &Endpoint, key: &str, req: PluginReq, limits: &NetLimits, timeout: Duration) -> Result<PluginReply, String> {
-    let pick = |m: ServerMsg| match m {
-        ServerMsg::Plugins(r) => Some(*r),
-        _ => None,
-    };
-    let open = OpenPlugins { protocol: PROTOCOL, key: key.to_string(), client_version: env!("CARGO_PKG_VERSION").to_string() };
-    let mut ws = connect(server, limits, timeout)?;
-    send(&mut ws, &ClientMsg::OpenPlugins(open))?;
-    match reply(&mut ws, limits, pick) {
-        Ok(PluginReply::Ready { .. }) => {}
-        // An older server can't read the request at all.
-        Err(e) if e.contains("couldn't be read") => return Err(format!("{} has no plugin directory (update the server)", server.display())),
-        Err(e) => return Err(e),
-        Ok(other) => return Err(format!("the server answered {other:?} instead of opening its plugin directory")),
-    }
-    send(&mut ws, &ClientMsg::Plugins(req))?;
-    let r = reply(&mut ws, limits, pick)?;
     close(ws);
     Ok(r)
 }

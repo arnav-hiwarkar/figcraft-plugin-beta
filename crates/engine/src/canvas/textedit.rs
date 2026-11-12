@@ -110,21 +110,6 @@ pub fn begin(s: &mut Session, id: NodeId, caret: Option<usize>, created: bool) -
 pub fn end(s: &mut Session) -> Result<()> {
     let Some(te) = s.ds()?.text_edit.clone() else { return Ok(()) };
     s.ds_mut()?.text_edit = None;
-    // A widget's editable field: the typing is put back and the new value goes to the widget's
-    // plugin through `widget.setText`, one undo step (or none when nothing changed).
-    if let Some((w, field)) = s.doc().ok().and_then(|d| crate::widgets::field_of(d, te.id)) {
-        let value = text_of(s, te.id).map(|t| t.characters).unwrap_or_default();
-        s.cancel_interaction()?;
-        let ds = s.ds_mut()?;
-        ds.selection = vec![w];
-        ds.revision += 1;
-        if text_of(s, te.id).is_ok_and(|t| t.characters != value)
-            && let Err(e) = s.execute("widget.setText", &serde_json::json!({"id": w, "field": field, "value": value}))
-        {
-            s.message = Some(e.to_string());
-        }
-        return Ok(());
-    }
     // A board object's text (a sticky's note) stays when emptied; the object is selected again.
     let owner = s.doc().ok().and_then(|d| crate::board::owner_of_text(d, te.id));
     let empty = owner.is_none() && text_of(s, te.id).map(|t| t.characters.trim().is_empty()).unwrap_or(false);

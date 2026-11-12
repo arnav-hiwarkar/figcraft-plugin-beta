@@ -266,13 +266,6 @@ fn inside_as_far_as_it_exists(path: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|r| resolved.starts_with(r))
 }
 
-/// Whether `path` lies in the app's own folder `folder`, both resolved (links and `..` followed);
-/// false when either can't be resolved.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub(crate) fn within_app_folder(path: &Path, folder: &Path) -> bool {
-    matches!((std::fs::canonicalize(path), std::fs::canonicalize(folder)), (Ok(p), Ok(f)) if p.starts_with(&f))
-}
-
 pub fn same_file(a: impl AsRef<Path>, b: impl AsRef<Path>) -> bool {
     let (a, b) = (a.as_ref(), b.as_ref());
     a == b || same_file::is_same_file(a, b).unwrap_or(false)
@@ -357,13 +350,6 @@ pub fn confined<R>(roots: Option<&Arc<Roots>>, f: impl FnOnce() -> R) -> R {
     }
 }
 
-/// Run `f` unconfined: only for the app's own files, never for a path a command was given.
-// Only plugins read from disk use it, and the browser has no disk.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub(crate) fn app_owned<R>(f: impl FnOnce() -> R) -> R {
-    scoped(None, f)
-}
-
 fn scoped<R>(roots: Option<Arc<Roots>>, f: impl FnOnce() -> R) -> R {
     /// Puts the outer scope's roots back, also when `f` panics.
     struct Restore(Option<Arc<Roots>>);
@@ -392,7 +378,7 @@ pub fn network_refused() -> Option<String> {
 
 /// What a confined command that would reach the network says.
 pub const NETWORK_REFUSED: &str =
-    "automation roots are set: commands don't reach the network (publishing, live sessions, team libraries and plugin directories are off)";
+    "automation roots are set: commands don't reach the network (publishing, live sessions and team libraries are off)";
 
 /// The path to use for `access` to `path`: resolved when confined, else as given.
 pub fn allow(path: impl AsRef<Path>, access: Access) -> Result<PathBuf> {

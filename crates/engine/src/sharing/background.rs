@@ -1,5 +1,5 @@
-//! Commands the UI runs without waiting on a server ([`Session::start_background`]): browsing and
-//! installing from a plugin directory, publishing, adding and checking team libraries.
+//! Commands the UI runs without waiting on a server ([`Session::start_background`]): publishing,
+//! adding and checking team libraries.
 //!
 //! Such a command runs as usual until it makes a server request ([`Session::net`]). Then the
 //! request goes out on the link's own thread ([`crate::live::LiveLink::background`]) and the

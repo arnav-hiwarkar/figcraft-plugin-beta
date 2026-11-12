@@ -344,6 +344,4 @@ fn background_requests_ask_about_hosting_and_sharing() {
         let Some(Next::Done(events, None)) = exchange::background(1, bad) else { panic!("not answered at once") };
         assert!(matches!(events.as_slice(), [Event::Net { reply, .. }] if matches!(**reply, NetReply::Hosting(Err(_)) | NetReply::Share(Err(_)))));
     }
-    let plugins = NetRequest::Plugins { server: SERVER.into(), req: figcraft_collab::message::PluginReq::List { query: String::new() } };
-    assert!(exchange::background(1, plugins).is_none());
 }

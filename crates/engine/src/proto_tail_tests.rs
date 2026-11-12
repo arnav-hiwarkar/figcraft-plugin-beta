@@ -11,7 +11,6 @@ use serde_json::{Value, json};
 use crate::Session;
 use crate::params::id_of;
 use crate::proto_run::{branch, set_mode, set_variable};
-use crate::widgets::click_on;
 
 fn ex(s: &mut Session, cmd: &str, p: Value) -> Value {
     s.execute(cmd, &p).unwrap_or_else(|e| panic!("{cmd} {p}: {e}"))
@@ -60,34 +59,6 @@ fn controller_buttons_fire_key_gamepad_triggers() {
     let doc = s.doc().unwrap();
     assert_eq!(doc.node(a).unwrap().interactions[0].trigger, Trigger::KeyPress { key: "Gamepad Menu".into() });
     assert!(uses_gamepad(doc), "the player polls controllers only for prototypes that use them");
-}
-
-#[test]
-fn widgets_react_to_clicks_on_the_prototypes_own_copy() {
-    let mut s = crate::widgets_tests::session();
-    let (w, _) = crate::widgets_tests::insert(&mut s);
-    let editor = s.doc().unwrap().clone();
-    let undo = crate::plugins_tests::undo_len(&s);
-    let state = |d: &figcraft_doc::Document| d.node(w).and_then(|n| n.plugin_data.get("figcraft.widget.state").cloned()).unwrap_or_default();
-    // Clicking calls the plugin back with the prototype's state of the widget, which it redraws.
-    let (copy, out) = click_on(&s, editor.clone(), w, "inc").unwrap();
-    assert_eq!(out["state"], json!({"n": 2}));
-    assert_eq!(out["targets"], json!(["inc", "dec"]));
-    assert_eq!(out["output"]["widget"]["event"], json!({"target": "inc"}), "the same callback as on the canvas");
-    assert_eq!(state(&copy), r#"{"n":2}"#);
-    // The editor's document and its history don't change: the state is the prototype's.
-    assert_eq!(state(s.doc().unwrap()), r#"{"n":1}"#);
-    assert_eq!(crate::plugins_tests::undo_len(&s), undo);
-    // Later clicks start from the copy's state (a target only the redrawn widget has).
-    let (copy, out) = click_on(&s, copy, w, "dec").unwrap();
-    assert_eq!(out["state"], json!({"n": 0}));
-    // Refusals leave the copy with the caller.
-    let e = click_on(&s, copy.clone(), w, "nope").unwrap_err().to_string();
-    assert!(e.contains("it has: inc"), "{e}");
-    let rect = idv(&ex(&mut s, "shape.rectangle", json!({"x": 400, "y": 0, "width": 10, "height": 10})));
-    assert!(click_on(&s, s.doc().unwrap().clone(), rect, "inc").is_err(), "not a widget");
-    ex(&mut s, "plugin.remove", json!({"id": "org.test.tally"}));
-    assert!(click_on(&s, copy, w, "inc").unwrap_err().to_string().contains("no plugin"), "without its plugin the widget stays as it is");
 }
 
 /// Screen A (a number `size`: 10 in Light, 20 in Dark; `label`: "light" / "dark"), its button, and a

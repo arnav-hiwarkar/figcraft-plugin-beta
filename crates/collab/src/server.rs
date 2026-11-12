@@ -467,12 +467,13 @@ impl Server {
                 Vec::new()
             }
             ClientMsg::Ping => vec![Outgoing::To(from, ServerMsg::Pong)],
+            ClientMsg::RetiredOpenPlugins(_) | ClientMsg::RetiredPlugins(_) => {
+                vec![Outgoing::To(from, ServerMsg::Refused { reason: "plugin distribution has been removed; use the Craft plugin manager".into() })]
+            }
             ClientMsg::Manage(_)
             | ClientMsg::Admin(_)
             | ClientMsg::OpenLibrary(_)
             | ClientMsg::Library(_)
-            | ClientMsg::OpenPlugins(_)
-            | ClientMsg::Plugins(_)
             | ClientMsg::OpenHosting(_)
             | ClientMsg::Resolve(_)
             | ClientMsg::ResolveTeam(_)

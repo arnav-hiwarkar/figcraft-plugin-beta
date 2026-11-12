@@ -337,8 +337,6 @@ pub struct Presenter {
     uses_pads: bool,
     /// The controller buttons held at the last poll (bit i: standard layout index i).
     pads_held: u32,
-    /// Clicks on widgets' clickable parts (widget, target), for [`Presenter::click_widgets`].
-    widget_clicks: Vec<(NodeId, String)>,
 }
 
 impl Presenter {
@@ -393,7 +391,6 @@ impl Presenter {
             pads: Vec::new(),
             uses_pads: false,
             pads_held: 0,
-            widget_clicks: Vec::new(),
         }
     }
 

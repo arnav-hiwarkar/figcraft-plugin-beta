@@ -18,7 +18,6 @@ pub mod cmd;
 mod content;
 mod dev;
 pub mod events;
-mod extensions;
 pub mod fonts;
 pub mod guard;
 pub mod keymap;
@@ -70,9 +69,6 @@ pub use dev::dev_resources;
 pub use dev::devcompare;
 pub use dev::devinspect;
 pub use dev::tailwind;
-pub use extensions::plugin_directory;
-pub use extensions::plugins;
-pub use extensions::widgets;
 pub use selection::rename;
 pub use selection::selection_colors;
 pub use selection::selection_reorder;
@@ -146,8 +142,6 @@ pub struct Session {
     pub message: Option<String>,
     /// Library files read for the open documents.
     pub libraries: library::Cache,
-    /// Plugin modules loaded in this session and the last plugin run.
-    pub plugins: plugins::Runtime,
     /// The live sessions (collaboration), one per document at most: status, peers, presence.
     /// [`Session::live`] is the active document's.
     pub live: live::Lives,
@@ -493,14 +487,6 @@ mod placed_image_size_tests;
 #[cfg(test)]
 mod playground_tests;
 #[cfg(test)]
-mod plugin_data_tests;
-#[cfg(test)]
-mod plugin_directory_tests;
-#[cfg(test)]
-mod plugin_panels_tests;
-#[cfg(test)]
-pub(crate) mod plugins_tests;
-#[cfg(test)]
 mod progressive_blur_tests;
 #[cfg(test)]
 mod prop_order_tests;
@@ -652,18 +638,34 @@ mod view_behaviour_tests;
 mod vote_history_tests;
 #[cfg(test)]
 mod vue_codegen_tests;
-#[cfg(test)]
-mod widget_hover_tests;
-#[cfg(test)]
-mod widget_input_tests;
-#[cfg(test)]
-mod widget_panel_tests;
-#[cfg(test)]
-mod widget_shapes_tests;
-#[cfg(test)]
-mod widgets_tests;
 
 #[cfg(test)]
 mod selection_reorder_tests;
 #[cfg(test)]
 mod selection_spacing_tests;
+
+#[cfg(test)]
+mod retired_data_tests {
+    #[test]
+    fn legacy_layer_data_and_settings_round_trip() {
+        let mut doc = figcraft_doc::Document::new("Legacy");
+        let page = doc.pages[0];
+        let mut node = figcraft_doc::Node::new(doc.alloc_id(), figcraft_doc::NodeKind::Frame, "Saved widget", 100.0, 100.0);
+        node.plugin_data.insert("figcraft.widget".into(), "org.example.old".into());
+        node.plugin_data.insert("figcraft.widget.state".into(), r#"{"unknown":[1,true,{"future":"opaque"}]}"#.into());
+        let id = node.id;
+        let data = node.plugin_data.clone();
+        doc.insert(node, page, None).unwrap();
+        let encoded = serde_json::to_value(&doc).unwrap();
+        let reopened: figcraft_doc::Document = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(reopened.node(id).unwrap().plugin_data, data);
+        assert_eq!(serde_json::to_value(&reopened).unwrap(), encoded);
+        let old =
+            serde_json::json!({"plugins":[{"manifest":{"api":999},"future":true}],"plugin_settings":{"x":{"k":[1,2]}},"plugin_directory":"ws://old"});
+        let prefs: super::Prefs = serde_json::from_value(old.clone()).unwrap();
+        let saved = serde_json::to_value(prefs).unwrap();
+        for key in ["plugins", "plugin_settings", "plugin_directory"] {
+            assert_eq!(saved[key], old[key]);
+        }
+    }
+}

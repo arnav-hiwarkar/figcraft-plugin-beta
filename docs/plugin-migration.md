@@ -13,15 +13,28 @@
 - NATIVE: start Helper with plugin/version/executable/work/api/grants/log; own its lifecycle.
 - PROJECTS: serde-default PluginRef list in the file manifest; check_project on open; desktop
   ProjectPrompt and CLI statuses; preserve opaque legacy widget/plugin state and previews.
-- MANAGEMENT: shared ManagerView in menu/settings and replace CLI publish with run_plugin;
+- MANAGEMENT: shared ManagerView in menu/settings and add CLI run_plugin;
   `plugin contract` must render contract().to_markdown(). No plugin downloads on project open.
 - RESOURCES: register fonts only for this app, activate craft-theme when available; investigate
   image-fill effect dispatch before advertising raster.filter.
-- LEGACY-REMOVAL: delete crates/plugin, top-level plugins, engine runtime/widgets/directory,
-  collab distribution messages and client distribution helpers, obsolete tests/docs and xtask hooks
-  only after migrating every caller. Keep document-owned opaque data and placeholders.
+- LEGACY-REMOVAL: complete. Removed the old crate, SDK/examples, runtime/widget commands,
+  directory transport, UI management/panels/palette/settings and xtask hooks. Retired collaboration
+  tags retain their postcard enum slots and JSON names, but refuse decoding with a clear removal
+  error. Existing document plugin_data remains opaque and serializes unchanged; saved widget
+  layers/previews remain ordinary layers. Unknown preferences round-trip through serde flatten.
+  The shared adapter remains inactive. No automatic downloads or activation occur on open.
 - SCOPE: replace conservative document grants for selected-target get/update/delete with
   host-captured selection authorization; guest JSON cannot determine permission scope.
-- SAFE-MODE: apply FIGCRAFT_SAFE_MODE=1 to startup, discovery and legacy runtime before activation.
+- SAFE-MODE: apply FIGCRAFT_SAFE_MODE=1 to startup and discovery before activation.
 - CONTRACT-DOCS: regenerate the shared contract markdown from the final adapter; replace empty
   operation examples with validated request/result schemas after operation dispatch is implemented.
+
+## Removal validation
+
+Scoped native cargo checks passed for collab, engine, collab-net, ui-egui, CLI, server,
+desktop and xtask. Edited test modules and the preservation/refusal fixtures compile; tests
+were not executed. Scoped wasm checks passed for collab, collab-net, engine, ui-egui and the
+web app. For the standalone UI wasm check, enable `--features egui/web_file`, matching the
+feature supplied by eframe in the web app (the repository's combined wasm check supplies it).
+No application, test, build, clippy or xtask command was run. The legacy symbol audit is clean;
+ordinary egui control helpers remain. The shared adapter was not changed or activated.

@@ -24,7 +24,7 @@ pub struct NetLimits {
     pub hello_timeout: Duration,
     /// A connection with no traffic for this long is dead.
     pub idle_timeout: Duration,
-    /// How long a one-shot request connection (hosting, a library, a plugin directory — and, most
+    /// How long a one-shot request connection (hosting, a library — and, most
     /// importantly, publishing a file) waits for the server's reply before giving up. Publishing
     /// uploads a whole file and a large one on a slow link takes the server a while to receive and
     /// answer, so this is longer than `idle_timeout` (a large project on a slow connection can
@@ -54,11 +54,11 @@ pub struct NetLimits {
     /// Bytes of messages handed to the hub and not handled yet, all connections together: past it
     /// a connection is dropped as busy instead of piling more on.
     pub max_in_flight: usize,
-    /// Largest message on a connection that only asks small things (browsing a plugin directory).
+    /// Largest message on a connection that only asks small requests.
     pub max_request: usize,
     /// Connections only sessions (`Hello`) and the operator may take: one-shot requests leave them.
     pub reserve_for_sessions: usize,
-    /// A one-shot request connection (hosting, a library, a plugin directory) with no traffic for
+    /// A one-shot request connection (hosting or a library) with no traffic for
     /// this long is dropped.
     pub request_idle: Duration,
 }

@@ -32,7 +32,6 @@ pub(crate) use tree::{forget_tree, item, separator, submenu};
 
 /// Commands the UI layer implements itself (dialogs and platform actions).
 pub const UI_COMMANDS: &[&str] = &[
-    "plugin.import",
     "file.open",
     "file.import",
     "file.placeImage",
@@ -98,7 +97,6 @@ pub fn invoke(app: &mut FigApp, id: &str) {
             app.run(id, json!({"edit": true}));
         }
         "help.checkForUpdates" | "app.checkForUpdates" => crate::updates_ui::check(app),
-        "plugin.import" => crate::plugins_ui::import_dialog(app),
         "file.import" => app.import_dialog(false),
         "file.placeImage" => app.import_dialog(true),
         "file.save" => app.save(),
@@ -262,10 +260,7 @@ pub fn available(id: &str) -> bool {
 /// Draw one level of the main menu: `prefix` is the menu path ("File", "Edit/Copy as").
 fn menu_level(app: &mut FigApp, ui: &mut Ui, prefix: &str) -> bool {
     let t = Tokens::get(ui.ctx());
-    // The installed plugins head the Plugins menu.
-    if prefix == "Plugins" && crate::plugins_ui::menu(app, ui, &t) {
-        return true;
-    }
+
     let mut clicked = None;
     let mut subs: Vec<String> = Vec::new();
     let mut last_sep = true;
@@ -368,7 +363,6 @@ const TOP_MENUS: &[&str] = &[
     tr_noop("Text"),
     tr_noop("Arrange"),
     tr_noop("Vector"),
-    tr_noop("Plugins"),
     tr_noop("Preferences"),
     tr_noop("Libraries"),
     tr_noop("Help"),

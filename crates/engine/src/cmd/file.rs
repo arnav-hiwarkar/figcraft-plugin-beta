@@ -21,7 +21,6 @@ mod open;
 mod save;
 mod version;
 
-pub(crate) use export::FORBIDDEN_FILE_NAME_CHARS;
 #[cfg(test)]
 use export::add_member;
 pub(super) use export::export_setting;

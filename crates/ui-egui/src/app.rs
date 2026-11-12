@@ -5,8 +5,8 @@ use super::state::{LEFT_PANEL, LeftTab, MOBILE_STRIP, MobilePanel, NARROW_WIDTH,
 use super::{
     Arc, Done, FigApp, NodeId, OsStr, Path, PathBuf, PendingAck, PendingDialog, Poll, Session, TaskContext, UiState, Value, Waker, a11y, branch_ui,
     canvas, cjk, comments, cursors, dev_compare, dialogs, frame_stats, home, home_recents, i18n, icons, import_report, json, layers, live, menus,
-    missing_fonts, online, plugins_ui, present, render_worker, right, selection_spacing, shortcuts, style_picker, tabs, theme, toolbar, ui_scale,
-    updates_ui, variable_ui, versions, widgets, windows,
+    missing_fonts, online, present, render_worker, right, selection_spacing, shortcuts, style_picker, tabs, theme, toolbar, ui_scale, updates_ui,
+    variable_ui, versions, widgets, windows,
 };
 
 mod clipboard;
@@ -204,12 +204,8 @@ impl FigApp {
         // its acknowledgement for the presented pass but never replays the input (its side effects
         // already happened and would otherwise duplicate).
         self.end_input_frame(&ctx);
-        // Plugins installed, removed or set up are kept at once: a crash doesn't lose them.
-        // So are the owner tokens of files put online, and preferences a command keeps at once.
-        if std::mem::take(&mut self.session.plugins.unsaved)
-            | std::mem::take(&mut self.session.live.unsaved)
-            | std::mem::take(&mut self.session.prefs_unsaved)
-        {
+        // Keep owner tokens and preferences immediately when commands change them.
+        if std::mem::take(&mut self.session.live.unsaved) | std::mem::take(&mut self.session.prefs_unsaved) {
             self.services.save_prefs(&self.session.prefs);
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -264,7 +260,7 @@ impl FigApp {
             present::show(self, ui);
             dialogs::show(self, &ctx);
             updates_ui::show(self, &ctx);
-            // What went wrong while presenting (a widget's plugin failing) shows over it.
+            // Presentation errors show over the player.
             self.toast_ui(&ctx);
             windows::requests(self, &ctx);
             shortcuts::clear_field_save_marker(&ctx);

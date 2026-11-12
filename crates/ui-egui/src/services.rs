@@ -70,7 +70,7 @@ pub trait Services {
     }
     /// After a panic in a frame: keep recovery copies of unsaved files.
     fn emergency_save(&mut self, _session: &Session) {}
-    /// Keep the preferences now (the installed plugins or their settings changed), as the app
+    /// Keep the preferences now (a command changed settings), as the app
     /// does when it quits.
     fn save_prefs(&mut self, _prefs: &figcraft_engine::Prefs) {}
     /// The OS or browser language as a tag ("es-ES"), for the "system" language preference.

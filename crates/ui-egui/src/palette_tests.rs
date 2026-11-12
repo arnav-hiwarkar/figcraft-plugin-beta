@@ -1,11 +1,9 @@
 //! The Actions palette, driven headless: runs from it record recents (newest first, capped),
 //! sections group commands by menu, a search covers every command with the best matches first,
-//! Up/Down move the highlight and Enter runs it, gone entries drop out of Recents, a used plugin
-//! resolves back to a row, and a press outside the panel closes it.
+//! Up/Down move the highlight and Enter runs it, gone entries drop out of Recents, and a press outside the panel closes it.
 
 use egui::{Event, Key, Modifiers, Pos2};
 use figcraft_engine::Session;
-use serde_json::json;
 
 use crate::layers_drag_tests::Ui;
 
@@ -74,28 +72,6 @@ fn gone_entries_drop_out_of_recents() {
 }
 
 /// A used plugin (API 4, several commands) resolves back to a Recents row.
-#[test]
-fn used_plugin_resolves_to_a_recent_row() {
-    let mut u = Ui::new(Session::new());
-    let plugin: figcraft_engine::plugins::InstalledPlugin = serde_json::from_value(json!({
-        "manifest": {
-            "id": "dev.local.solar-icons",
-            "name": "Solar icons",
-            "main": "solar_icons.wasm",
-            "api": 4,
-            "commands": [
-                {"id": "panel", "label": "Panel"},
-                {"id": "grid", "label": "Grid"},
-            ],
-        },
-    }))
-    .unwrap();
-    u.app.session.prefs.plugins.push(plugin);
-    crate::menus::record_recent(&mut u.app, "plugin:dev.local.solar-icons/panel");
-    let row = crate::menus::recent_row(&u.app, "plugin:dev.local.solar-icons/panel", "").expect("a used plugin stays in Recents");
-    assert_eq!(row.label, "Solar icons — Panel");
-    assert!(crate::menus::recent_row(&u.app, "plugin:dev.local.solar-icons/panel", "zzz").is_none(), "the query filters recents");
-}
 
 /// A press outside the panel closes it; the opening press is spared once.
 #[test]

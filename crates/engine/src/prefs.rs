@@ -1,4 +1,4 @@
-use super::{Arc, BTreeMap, Deserialize, Document, NodeId, Serialize, Value, cmd, live, online, plugins};
+use super::{Arc, BTreeMap, Deserialize, Document, NodeId, Serialize, Value, cmd, live, online};
 
 /// The smallest and largest interface size, relative to the system's display scale (1.0 is the
 /// system's own size).
@@ -26,6 +26,9 @@ fn read_ui_scale<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
+    /// Unknown settings, including retired plugin configuration, round-trip unchanged.
+    #[serde(flatten)]
+    pub opaque: BTreeMap<String, Value>,
     pub nudge_small: f64,
     pub nudge_big: f64,
     pub keep_tool: bool,
@@ -68,16 +71,6 @@ pub struct Prefs {
     /// `figcraft://` invite links open this app (`collab.registerLinks`); `None`: on for installed
     /// builds, off for development builds.
     pub invite_links: Option<bool>,
-    /// Installed plugins (Plugins menu), in menu order.
-    #[serde(serialize_with = "plugins::persisted")]
-    pub plugins: Vec<plugins::InstalledPlugin>,
-    /// Plugins' own settings (`setting_set`), by plugin id, then key: JSON values, capped per
-    /// plugin.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub plugin_settings: BTreeMap<String, BTreeMap<String, Value>>,
-    /// The plugin directory browsed last (`ws://host:port/`, never with a key).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub plugin_directory: Option<String>,
     /// The server files are shared through online (Share ▸ Online, join codes; Publish to server
     /// suggests it too): `wss://host/`, never with a key. [`live::DEFAULT_SERVER`] unless the user
     /// chose another; empty: online sharing is off (saved as empty, so it stays off).
@@ -113,8 +106,7 @@ pub struct Prefs {
     #[serde(deserialize_with = "crate::board_grid::read")]
     pub board_grid: crate::board_grid::BoardGrid,
     /// Recently run actions (the Actions palette's Recents), newest first, at most
-    /// [`MAX_RECENT_ACTIONS`]. Entries are `command:<id>`, `plugin:<plugin>/<command>` or
-    /// `widget:<plugin>`.
+    /// [`MAX_RECENT_ACTIONS`]. Retired action keys are ignored by the palette.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recent_actions: Vec<String>,
     /// The team libraries you added (`library.add`) or checked (`library.check`), as hashes of
@@ -131,6 +123,7 @@ pub const MAX_RECENT_ACTIONS: usize = 5;
 impl Default for Prefs {
     fn default() -> Self {
         Self {
+            opaque: BTreeMap::new(),
             nudge_small: 1.0,
             nudge_big: 10.0,
             keep_tool: false,
@@ -150,9 +143,6 @@ impl Default for Prefs {
             auto_save: false,
             start_on_home: false,
             invite_links: None,
-            plugins: Vec::new(),
-            plugin_settings: BTreeMap::new(),
-            plugin_directory: None,
             publish_server: live::DEFAULT_SERVER.into(),
             recent_files: Vec::new(),
             online_files: Vec::new(),

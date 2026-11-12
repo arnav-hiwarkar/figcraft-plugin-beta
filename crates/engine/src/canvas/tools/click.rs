@@ -5,21 +5,16 @@ use super::{
 };
 
 impl Session {
-    /// Handle a double-click gesture: finish a pen path, rename or click labels/widgets,
+    /// Handle a double-click gesture: finish a pen path, rename labels,
     /// cancel an in-progress move/resize/draw/marquee, handle board double-clicks, enter text
     /// editing (select-all on entry, word-select inside the running edit), enter vector editing
     /// for selected shapes, and step groups/frames one level deeper.
-    /// A double-click on `leaf` that a board object or a widget's editable field takes (typing into
-    /// a sticky or a shape on a board; editing the field like any text, its plugin told when editing
-    /// ends). Whether it was taken.
-    fn object_double_click(&mut self, doc: &Document, leaf: NodeId, sel: &[NodeId], p: Point, edits: bool) -> Result<bool> {
+    /// Whether a board object takes a double-click on `leaf`.
+    fn object_double_click(&mut self, doc: &Document, leaf: NodeId, sel: &[NodeId]) -> Result<bool> {
         if matches!(self.tool.tool, ToolId::Move | ToolId::Scale) && self.board_double_click(doc, leaf, sel)? {
             return Ok(true);
         }
-        match crate::widgets::field_at(doc, leaf, p).filter(|_| edits) {
-            Some(field) => textedit::begin(self, field, None, false).map(|()| true),
-            None => Ok(false),
-        }
+        Ok(false)
     }
 
     /// A double-click on an edge handle of the one selected layer auto layout sizes: Hug contents
@@ -53,7 +48,7 @@ impl Session {
         }
         let edits = !self.tool.dev_mode;
         // A frame's or section's name label: rename it there (the canvas puts a field over it).
-        // Labels come before widgets, as on a press; the second press began a move: undo it.
+        // Labels take priority, as on a press; the second press began a move: undo it.
         if edits
             && matches!(self.tool.tool, ToolId::Move | ToolId::Scale)
             && !(ev.shift || ev.cmd || ev.alt)
@@ -65,17 +60,6 @@ impl Session {
                 self.set_selection(vec![id]);
             }
             self.request_ui("canvas.renameLabel", serde_json::json!({"id": id}));
-            return Ok(());
-        }
-        // Quick clicks on a widget's clickable part are clicks, one by one.
-        if edits
-            && matches!(self.tool.tool, ToolId::Move | ToolId::Scale)
-            && !(ev.shift || ev.cmd || ev.alt)
-            && self.hit(&doc, page, ev.p(), ev.tol() * 2.0).and_then(|hit| crate::widgets::target_at(&doc, hit, ev.p())).is_some()
-        {
-            self.tool.gesture = Gesture::None;
-            self.cancel_interaction()?;
-            self.widget_click(ev.p(), ev.tol() * 2.0)?;
             return Ok(());
         }
         // The second press began a move, a resize, a shape or a marquee: a double-click isn't one.
@@ -105,7 +89,7 @@ impl Session {
             return crate::vectoredit::begin_many(self, &[id]);
         }
         let Some(leaf) = hit_here else { return Ok(()) };
-        if self.object_double_click(&doc, leaf, &sel, ev.p(), edits)? {
+        if self.object_double_click(&doc, leaf, &sel)? {
             return Ok(());
         }
         let target = select_target(&doc, leaf, &sel, true);
@@ -142,17 +126,6 @@ impl Session {
         let deeper = figcraft_doc::geometry::enter_target(&doc, leaf, &sel);
         if deeper != target || !sel.contains(&deeper) {
             self.set_selection(vec![deeper]);
-        }
-        Ok(())
-    }
-
-    /// A plain click at `p` on a clickable part of a widget calls its plugin back (a failure is
-    /// shown as a message).
-    pub(super) fn widget_click(&mut self, p: Point, tol: f64) -> Result<()> {
-        let (doc, page) = (self.doc()?.clone(), self.page()?);
-        let Some((id, target)) = self.hit(&doc, page, p, tol).and_then(|hit| crate::widgets::target_at(&doc, hit, p)) else { return Ok(()) };
-        if let Err(e) = self.execute("widget.click", &serde_json::json!({"id": id, "target": target})) {
-            self.message = Some(e.to_string());
         }
         Ok(())
     }

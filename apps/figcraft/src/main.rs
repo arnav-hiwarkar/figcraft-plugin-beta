@@ -226,8 +226,6 @@ fn main() -> eframe::Result {
         r.adopt(recovered.waiting);
     }
     *recovery::lock(&recovery) = copies;
-    // Plugins installed from a server's plugin directory live with the user's settings.
-    session.plugins.install_dir = services::config_dir().map(|d| d.join("Plugins"));
     // Invite links open this app (Windows registers per user at run time; installed builds by
     // default, never a build from source unless asked).
     session.live.links = figcraft_collab_net::links::system();

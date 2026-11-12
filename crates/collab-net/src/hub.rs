@@ -4,7 +4,7 @@
 //!
 //! What differs between the two lives behind a [`Backend`]: which hellos it admits and with what
 //! access, where a file that isn't open comes from, what is kept of the changes (a server appends
-//! them to its log; the app keeps nothing), and the managing, team library and plugin directory
+//! them to its log; the app keeps nothing), and the managing and team library
 //! connections a server answers. The person hosting an app session takes part through the hub directly (no
 //! socket): their presence and edits go in with [`Hosting::presence`] and [`Hosting::send`], what
 //! others do comes out through their [`Inbox`].
@@ -222,7 +222,7 @@ impl<B: Backend> Hub<B> {
                     ClientMsg::Hello(hello) => self.join(conn, hello, c),
                     ClientMsg::Manage(m) => self.manage(conn, &m, c),
                     ClientMsg::OpenLibrary(o) => self.open_library(conn, o, c),
-                    ClientMsg::OpenPlugins(_) => refuse(&c.out, "plugin distribution has been removed; use the Craft plugin manager"),
+                    ClientMsg::RetiredOpenPlugins(_) => refuse(&c.out, "plugin distribution has been removed; use the Craft plugin manager"),
                     ClientMsg::OpenHosting(o) => self.open_hosting(conn, &o, c),
                     ClientMsg::Resolve(r) => self.resolve(&r, &c),
                     ClientMsg::ResolveTeam(r) => self.resolve_team(&r, &c),

@@ -477,9 +477,6 @@ fn a_scope_confines_the_thread_and_ends_with_it() {
         assert!(allow(f.p("outside/secret.txt"), Access::Read).is_err());
         assert!(super::read_capped(f.p("outside/secret.txt"), 64).is_err());
         assert_eq!(super::read_capped(f.p("root/in.txt"), 64).unwrap(), b"in");
-        // Not confined: the app's own files.
-        assert_eq!(super::app_owned(|| super::read_capped(f.p("outside/secret.txt"), 64).unwrap()), b"secret");
-        assert!(current().is_some(), "back in the scope after app_owned");
         // Another thread isn't confined by this one's scope.
         let p = f.p("outside/secret.txt");
         assert!(std::thread::spawn(move || current().is_none() && allow(p, Access::Read).is_ok()).join().unwrap());
@@ -651,17 +648,6 @@ fn a_root_given_through_a_link_tells_why_paths_in_it_are_refused() {
     let r = Roots::new(&[], &[f.p("via")]).unwrap();
     let e = r.check(Path::new(&f.p("via/dangling.txt")), Access::Write).unwrap_err();
     assert!(e.contains("leads nowhere"), "{e}");
-}
-
-#[test]
-fn only_resolved_paths_count_as_the_apps_own_folder() {
-    let f = Fixture::new("own");
-    let install = f.0.join("root");
-    assert!(super::within_app_folder(&install.join("in.txt"), &install));
-    assert!(!super::within_app_folder(&install.join("..").join("outside").join("secret.txt"), &install), "`..` leaves it");
-    assert!(!super::within_app_folder(&f.0.join("root2"), &install), "a folder named like it is another");
-    assert!(!super::within_app_folder(&install.join("missing.wasm"), &install));
-    assert!(!super::within_app_folder(&install.join("in.txt"), &f.0.join("no-such-folder")));
 }
 
 #[test]

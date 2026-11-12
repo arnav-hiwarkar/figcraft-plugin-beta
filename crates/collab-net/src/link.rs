@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use figcraft_collab::code;
-use figcraft_collab::message::{Access, Admin, AdminReply, ClientMsg, LibraryReply, LibraryReq, PluginReply, PluginReq};
+use figcraft_collab::message::{Access, Admin, AdminReply, ClientMsg, LibraryReply, LibraryReq};
 use figcraft_engine::live::{
     Bind, Event, HostInfo, HostOptions, LiveLink, NO_SESSION, NetReply, NetRequest, PageInfo, Presence, PublishOptions, Published, Resume, Role,
     SessionId, SessionInfo, Shared, WayIn,
@@ -238,10 +238,6 @@ impl LiveLink for NetLink {
         manage::library(link, req, &self.limits, CONNECT)
     }
 
-    fn plugins(&mut self, server: &str, req: PluginReq) -> Result<PluginReply, String> {
-        plugins(server, req, &self.limits)
-    }
-
     fn hosting(&mut self, server: &str, file: &str, owner: &str, req: Option<Admin>) -> Result<(HostInfo, Option<AdminReply>), String> {
         hosting(server, file, owner, req, &self.limits)
     }
@@ -255,7 +251,6 @@ impl LiveLink for NetLink {
         let (failed, failure) = (inbox.clone(), req.failure());
         let spawned = std::thread::Builder::new().name("server-request".into()).spawn(move || {
             let reply = match req {
-                NetRequest::Plugins { server, req } => NetReply::Plugins(plugins(&server, req, &limits)),
                 NetRequest::Library { link, req } => NetReply::Library(manage::library(&link, req, &limits, CONNECT)),
                 NetRequest::Upload(o) => NetReply::Upload(upload(o, &limits)),
                 NetRequest::Hosting { server, file, owner, req } => NetReply::Hosting(hosting(&server, &file, &owner, req, &limits)),
@@ -362,14 +357,6 @@ fn share(server: &str, file: &str, owner: &str, revoke: &[String], create: bool,
     let key = requests::server_key(None, query);
     requests::key_over_tls(&endpoint, key.as_deref())?;
     manage::share(&endpoint, key.as_deref(), file, owner, revoke, create, limits, CONNECT)
-}
-
-/// One request to the plugin directory at `server` (its key in the address's query, if any).
-fn plugins(server: &str, req: PluginReq, limits: &NetLimits) -> Result<PluginReply, String> {
-    let (server, query) = Endpoint::parse(server)?;
-    let key = query.into_iter().find(|(k, _)| k == "key").map(|(_, v)| v).unwrap_or_default();
-    requests::key_over_tls(&server, Some(&key))?;
-    manage::plugins(&server, key.trim(), req, limits, CONNECT)
 }
 
 impl Drop for NetLink {

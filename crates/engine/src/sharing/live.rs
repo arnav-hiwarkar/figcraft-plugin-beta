@@ -44,7 +44,7 @@ use std::sync::Arc;
 use figcraft_collab::Client;
 use figcraft_collab::code::{self, Code};
 pub use figcraft_collab::message::Signal;
-use figcraft_collab::message::{Admin, AdminReply, ClientMsg, EditingText, LibraryReply, LibraryReq, PluginReply, PluginReq, ServerMsg};
+use figcraft_collab::message::{Admin, AdminReply, ClientMsg, EditingText, LibraryReply, LibraryReq, ServerMsg};
 
 pub use figcraft_collab::message::{Access, HostInfo, Resume, utc_date};
 use figcraft_doc::{Document, NodeId};

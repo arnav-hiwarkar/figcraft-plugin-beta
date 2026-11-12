@@ -130,7 +130,7 @@ impl Session {
         self.tool.overlay.stamp_target = None;
         let drop_target = self.tool.overlay.drop_target.take();
         match g {
-            Gesture::Move { ids, moved, duplicate, start, deselect, keep, .. } => {
+            Gesture::Move { ids, moved, duplicate, deselect, keep, .. } => {
                 if moved {
                     // A free move lands in the frame under the pointer (or the page) where it was
                     // dropped; layers in an auto layout frame already sit in their slot.
@@ -182,9 +182,6 @@ impl Session {
                         if sel.len() > 1 && (sel.contains(&k) || sel.iter().any(|s| doc.is_ancestor(*s, k))) {
                             self.set_selection(vec![k]);
                         }
-                    }
-                    if deselect.is_none() && !(ev.shift || ev.cmd || duplicate) {
-                        self.widget_click(start, ev.tol() * 2.0)?;
                     }
                 }
             }

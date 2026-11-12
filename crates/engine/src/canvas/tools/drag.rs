@@ -81,9 +81,7 @@ impl Session {
         // dragged.
         let board_background = |leaf: NodeId| {
             !sel.contains(&leaf)
-                && doc.node(leaf).is_some_and(|n| {
-                    n.parent == Some(page) && n.kind.is_frame_like() && !n.children.is_empty() && !crate::widgets::is_widget(n) && !n.is_board_atom()
-                })
+                && doc.node(leaf).is_some_and(|n| n.parent == Some(page) && n.kind.is_frame_like() && !n.children.is_empty() && !n.is_board_atom())
         };
         let label = label_at(&doc, page, &self.tool.labels, ev.p());
         let target = label.or_else(|| {

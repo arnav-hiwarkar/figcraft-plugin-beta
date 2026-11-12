@@ -12,10 +12,7 @@
 //! - `parity`  menu-catalog coverage → docs/parity-checklist.md
 //! - `version` print the version, or `version set X.Y.Z`
 //! - `icon`    regenerate the app icon PNGs/ICO from assets/app-icon/figcraft.svg (needs resvg)
-//! - `wasm`    check the core crates and web app for wasm32, and build the plugin SDK and examples
-//! - `plugins` format-check, lint, test and build the plugin SDK and example plugins (`plugins/`, a
-//!   workspace of its own) for wasm32: `<target>/plugins/dist/<example>/` holds each manifest and
-//!   module, ready for Plugins ▸ Development ▸ Import plugin from manifest…
+//! - `wasm`    check the core crates and web app for wasm32
 //! - `bench`   release-build timings at 1k/10k/50k layers (`bench 1000,10000` for other sizes) and
 //!   with a synthetic design system used by 2,000 instances
 
@@ -52,10 +49,9 @@ fn main() -> ExitCode {
         "version" => version(args.get(1).map(String::as_str), args.get(2).map(String::as_str)),
         "icon" => icon::generate(&root()),
         "wasm" => wasm(),
-        "plugins" => plugins(),
         "bench" => bench(args.get(1).map_or("1000,10000,50000", String::as_str)),
         _ => {
-            eprintln!("tasks: ci, test, i18n-report, layers, assets, docs, parity, version [set X.Y.Z], icon, wasm, plugins, bench [SIZES]");
+            eprintln!("tasks: ci, test, i18n-report, layers, assets, docs, parity, version [set X.Y.Z], icon, wasm, bench [SIZES]");
             task == "help"
         }
     };
@@ -109,48 +105,7 @@ fn wasm() -> bool {
         "figcraft-ui-egui",
         "-p",
         "figcraft-web",
-    ])) && plugins()
-}
-
-/// The example plugins in `plugins/examples` (each folder's name is its package; its module is
-/// `<name with _>.wasm`).
-const EXAMPLE_PLUGINS: &[&str] = &["tidy-names", "swatch-grid", "counter", "export-names"];
-
-/// The plugin workspace: fmt, clippy and build for wasm32, host tests, then each example's manifest
-/// and module side by side in `<target>/plugins/dist/<example>/`.
-fn plugins() -> bool {
-    let root = root();
-    let manifest = root.join("plugins").join("Cargo.toml");
-    let target = std::env::var_os("CARGO_TARGET_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| root.join("target"));
-    let ws = |args: &[&str]| {
-        let mut c = cargo();
-        // Keep the caller's target; Cargo separates host and wasm artifacts itself.
-        c.args(args).arg("--manifest-path").arg(&manifest).env("CARGO_TARGET_DIR", &target);
-        c
-    };
-    let wasm = ["--target", "wasm32-unknown-unknown", "--locked"];
-    let ok = run(&mut ws(&["fmt", "--all", "--check"]))
-        && run(ws(&["clippy", "--workspace", "--release"]).args(wasm).args(["--", "-D", "warnings"]))
-        && run(&mut ws(&["test", "--workspace", "--locked"]))
-        && run(ws(&["build", "--workspace", "--release"]).args(wasm));
-    if !ok {
-        return false;
-    }
-    for name in EXAMPLE_PLUGINS {
-        let module = format!("{}.wasm", name.replace('-', "_"));
-        let dist = target.join("plugins/dist").join(name);
-        let copied = std::fs::create_dir_all(&dist)
-            .and_then(|()| std::fs::copy(root.join("plugins/examples").join(name).join("figcraft-plugin.json"), dist.join("figcraft-plugin.json")))
-            .and_then(|_| std::fs::copy(target.join("wasm32-unknown-unknown/release").join(&module), dist.join(&module)));
-        match copied {
-            Ok(bytes) => eprintln!("plugins: {} ({} KB)", dist.display(), bytes / 1024),
-            Err(e) => {
-                eprintln!("plugins: {name}: {e}");
-                return false;
-            }
-        }
-    }
-    true
+    ]))
 }
 
 /// Engine/render timings (`figcraft-cli perf`) and UI frame timings (an ignored test driving the

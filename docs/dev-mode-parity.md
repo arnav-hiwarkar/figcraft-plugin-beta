@@ -1,5 +1,7 @@
 # Dev Mode parity
 
+> Migration update (2026-11-13): legacy plugin execution, widgets, directory and UI have been removed. Saved layer data/previews remain preserved. The shared Craft adapter is inactive; older dated entries below describe historical behavior. See [remaining work](plugin-migration.md).
+
 > **Last reviewed:** 2026-10-24 · **Last updated:** 2026-11-09 · **Change:** patch (the Annotation tool (Shift+T, `tool.annotation {id?}`): with a layer selected (or an `id`) it asks the UI for that layer's note at once, and in the tool a press on a layer selects it and asks for its note, a press on empty canvas does nothing; the Inspect tab then opens (never toggles away) with the caret in that layer's new-note field, and the engine never writes the note itself (#1840); the handoff mode reads Developer Mode in the interface, its ids and saved fields unchanged; class names transliterate non-ASCII layer names (#1235); measurements kept on the canvas; a read-only layers panel in Dev Mode; earlier: import lines in generated layer trees; compare with any saved version; Dev Mode behaviour suite: an inspect-only canvas, Changed in the ready list, statuses only on frames and sections; plugin panels from the Inspect tab) · **Target:** Figma Design Dev Mode (desktop app 126.10.7)
 
 **Breadth ~98%, ready ~78% (estimated).** The inspect surface is broad, components connect

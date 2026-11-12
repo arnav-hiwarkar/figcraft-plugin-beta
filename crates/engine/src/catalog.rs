@@ -250,10 +250,6 @@ pub static MENU: &[MenuItem] = &[
     m!("Vector", "Simplify vector", "vector.simplify"),
     m!("Vector", "Reverse path direction", "vector.reverse"),
     m!("Vector", "Offset path", "vector.offset"),
-    // Plugins
-    m!("Plugins", "Run last plugin", "plugins.runLast"),
-    m!("Plugins", "Manage plugins…", "plugins.manage"),
-    m!("Plugins/Development", "Import plugin from manifest…", "plugin.import"),
     // Preferences
     m!("Preferences", "Snap to geometry", "view.snapGeometry"),
     m!("Preferences", "Snap to objects", "view.snapObjects"),

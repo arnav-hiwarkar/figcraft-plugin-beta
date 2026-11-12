@@ -80,24 +80,6 @@ impl Presenter {
         did
     }
 
-    /// Run the widget clicks the player took: each calls its plugin back on the player's copy (the
-    /// prototype's own state of the widget), as on the canvas but without touching the file.
-    /// Returns what went wrong, for a toast.
-    pub fn click_widgets(&mut self, s: &figcraft_engine::Session) -> Option<String> {
-        let mut error = None;
-        for (id, target) in std::mem::take(&mut self.widget_clicks) {
-            let Some(doc) = self.design.clone() else { break };
-            match figcraft_engine::widgets::click_on(s, doc, id, &target) {
-                Ok((d, _)) => {
-                    self.design = Some(d);
-                    self.relayout();
-                }
-                Err(e) => error = Some(e.to_string()),
-            }
-        }
-        error
-    }
-
     pub(crate) fn perform(&mut self, a: &Action, node: NodeId, tr: Transition, dur: f64, easing: Easing, rect: Option<Rect>, now: f64) -> bool {
         self.perform_at(a, node, ActionTiming { transition: tr, duration: dur, easing, rect, now, depth: 0 })
     }

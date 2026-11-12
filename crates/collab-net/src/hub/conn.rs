@@ -160,7 +160,7 @@ fn next_message(ws: &mut WebSocket<Duplex>, max: usize, deadline: Option<Instant
             Ok(Message::Binary(b)) => {
                 // Whole now: it counts as in flight from here, no longer as being read.
                 ws.get_mut().read_done();
-                message::decode::<ClientMsg>(&b, max).map(|m| Some((m, b.len()))).map_err(|_| "that message couldn't be read".to_string())
+                message::decode::<ClientMsg>(&b, max).map(|m| Some((m, b.len()))).map_err(|e| format!("that message couldn't be read: {e}"))
             }
             Ok(Message::Text(_)) => Err("only binary messages are spoken here".into()),
             // Pings keep the per-read timeout alive, but not the overall deadline (slowloris), and
@@ -276,7 +276,7 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
                 first @ (ClientMsg::Hello(_)
                 | ClientMsg::Manage(_)
                 | ClientMsg::OpenLibrary(_)
-                | ClientMsg::OpenPlugins(_)
+                | ClientMsg::RetiredOpenPlugins(_)
                 | ClientMsg::OpenHosting(_)
                 | ClientMsg::Resolve(_)
                 | ClientMsg::ResolveTeam(_)),
@@ -293,10 +293,7 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
                     ClientMsg::Hello(_) => limits.idle_timeout,
                     _ => limits.request_idle,
                 };
-                let max = match &first {
-                    ClientMsg::OpenPlugins(o) if o.key.is_empty() => limits.max_request,
-                    _ => limits.max_client_message,
-                };
+                let max = limits.max_client_message;
                 let reserved = !session && open.0.load(Ordering::Relaxed) > limits.max_connections.saturating_sub(limits.reserve_for_sessions);
                 // (In flight is only taken when the connection goes on: the hub gives it back.)
                 if reserved || !shared.in_flight.take(bytes, limits.max_in_flight) {
