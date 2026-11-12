@@ -13,6 +13,14 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/figcraft"
 
 [workspace.dependencies]
+# Beta layout; replace with git dependencies before upstreaming.
+craft-ext-core = { path = "../craft-extensions/crates/ext-core" }
+craft-ext-host = { path = "../craft-extensions/crates/ext-host" }
+craft-ext-store = { path = "../craft-extensions/crates/ext-store" }
+craft-ext-ui = { path = "../craft-extensions/crates/ext-ui" }
+craft-ext-cli = { path = "../craft-extensions/crates/ext-cli", default-features = false }
+figcraft-plugins = { path = "crates/plugins" }
+
 # internal
 figcraft-geom = { path = "crates/geom" }
 figcraft-color = { path = "crates/color" }
