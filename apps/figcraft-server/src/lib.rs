@@ -12,7 +12,6 @@ pub mod abuse;
 pub mod cli;
 pub mod codes;
 pub mod config;
-pub mod directory;
 pub mod disk;
 pub mod store;
 
@@ -96,8 +95,6 @@ mod cli_tests;
 mod codes_tests;
 #[cfg(test)]
 mod comment_link_tests;
-#[cfg(test)]
-mod directory_tests;
 #[cfg(test)]
 mod download_burst_tests;
 #[cfg(test)]

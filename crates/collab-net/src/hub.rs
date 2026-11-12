@@ -31,8 +31,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use figcraft_collab::message::{
-    self, Access, Admin, AdminReply, ClientMsg, Hello, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL,
-    PluginReply, PluginReq, Presence, Resolve, ResolveTeam, ServerMsg, reads_hosting,
+    self, Access, Admin, AdminReply, ClientMsg, Hello, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, PROTOCOL, Presence,
+    Resolve, ResolveTeam, ServerMsg, reads_hosting,
 };
 use figcraft_collab::{Outgoing, Server};
 use figcraft_engine::live::{Event, MAX_NAME, PEOPLE, sanitize};
@@ -75,8 +75,6 @@ enum Kind {
     Managing { comments: bool },
     /// Using `file`'s team library through link `link` of `access` (revoking it disconnects).
     Library { file: String, access: Access, link: Option<String> },
-    /// Using the plugin directory; `publisher`: with the server's key.
-    Plugins { publisher: bool },
     /// Publishing without the key, or managing the file `owns` with its owner token; `comments`:
     /// its client reads comment links.
     Hosting { owns: Option<String>, comments: bool },
@@ -224,7 +222,7 @@ impl<B: Backend> Hub<B> {
                     ClientMsg::Hello(hello) => self.join(conn, hello, c),
                     ClientMsg::Manage(m) => self.manage(conn, &m, c),
                     ClientMsg::OpenLibrary(o) => self.open_library(conn, o, c),
-                    ClientMsg::OpenPlugins(o) => self.open_plugins(conn, &o, c),
+                    ClientMsg::OpenPlugins(_) => refuse(&c.out, "plugin distribution has been removed; use the Craft plugin manager"),
                     ClientMsg::OpenHosting(o) => self.open_hosting(conn, &o, c),
                     ClientMsg::Resolve(r) => self.resolve(&r, &c),
                     ClientMsg::ResolveTeam(r) => self.resolve_team(&r, &c),
@@ -319,14 +317,6 @@ impl<B: Backend> Hub<B> {
                 }
                 ClientMsg::Ping => self.answer(conn, &ServerMsg::Pong),
                 _ => self.kick(&[conn], "only library requests are spoken on this connection"),
-            },
-            Some(Kind::Plugins { publisher }) => match msg {
-                ClientMsg::Plugins(req) => {
-                    let reply = self.backend.plugins(ip, *publisher, req);
-                    self.answer(conn, &ServerMsg::Plugins(Box::new(reply)));
-                }
-                ClientMsg::Ping => self.answer(conn, &ServerMsg::Pong),
-                _ => self.kick(&[conn], "only plugin directory requests are spoken on this connection"),
             },
             None => {}
         }
@@ -491,18 +481,6 @@ impl<B: Backend> Hub<B> {
             Err(why) => return refuse(&c.out, &why),
         };
         self.take_in(conn, c, Kind::Library { file: o.file, access, link }, &ServerMsg::Library(Box::new(LibraryReply::Ready { access })));
-    }
-
-    /// A plugin directory connection: anyone may browse; a key, when given, must be the server's.
-    fn open_plugins(&mut self, conn: u64, o: &OpenPlugins, c: Pending) {
-        if o.protocol != PROTOCOL {
-            return refuse(&c.out, &unsupported(o.protocol));
-        }
-        let publisher = !o.key.is_empty();
-        if publisher && let Err(why) = self.backend.manage(&o.key) {
-            return refuse(&c.out, &why);
-        }
-        self.take_in(conn, c, Kind::Plugins { publisher }, &ServerMsg::Plugins(Box::new(PluginReply::Ready { publisher })));
     }
 
     /// An open hosting connection: what the server says about its hosting, then publishing (when

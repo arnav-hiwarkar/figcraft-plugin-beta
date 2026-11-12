@@ -2181,7 +2181,6 @@ dependencies = [
  "figcraft-doc",
  "figcraft-engine",
  "figcraft-format",
- "figcraft-plugin",
  "log",
  "rustix 1.1.5",
  "serde",

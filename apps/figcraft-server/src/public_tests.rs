@@ -554,8 +554,8 @@ fn open_connections_never_reach_what_needs_the_key() {
         &NetLimits::default(),
         Duration::from_secs(5),
     )
-    .unwrap();
-    assert!(matches!(e, figcraft_collab::message::PluginReply::Failed { .. }), "{e:?}");
+    .unwrap_err();
+    assert!(e.contains("distribution has been removed"), "{e}");
     // Open-mode answers never carry the server key.
     assert!(!format!("{info:?}").contains(&k));
     server.stop();

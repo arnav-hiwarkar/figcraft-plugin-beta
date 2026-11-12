@@ -1,26 +1,13 @@
-//! The app's way of talking to a server without waiting (`Session::start_background`), end to end
-//! over loopback: browsing and installing from the plugin directory, publishing a team library,
-//! adding it and asking for its usage each return at once and finish when the answers arrive; a
-//! server that never answers doesn't hold the caller up.
+//! Team library background requests return immediately and complete when answers arrive.
+//! A server that never answers does not hold the caller up.
 
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
 use figcraft_engine::Session;
-use figcraft_plugin::bundle::Bundle;
 use serde_json::{Value, json};
 
-use crate::store::Store;
 use crate::test_util::{TempDir, config, publish, pump, session};
-
-const ID: &str = "org.example.tiny";
-
-fn bundle() -> Vec<u8> {
-    let wasm =
-        wat::parse_str(r#"(module (memory (export "memory") 1) (func (export "figcraft_run") (param i32) (result i32) i32.const 0))"#).unwrap();
-    let manifest = json!({"id": ID, "name": "Tiny tool", "version": "1.0.0", "main": "tiny.wasm", "permissions": {"access": "read"}});
-    Bundle { manifest: manifest.to_string(), wasm, assets: Vec::new() }.encode()
-}
 
 /// Start `cmd` without waiting (it must not finish at once: its answer comes over the network),
 /// then pump the session until it finished; its result.
@@ -36,26 +23,6 @@ fn background(s: &mut Session, cmd: &str, params: Value) -> Value {
 
 fn id(v: &Value) -> Value {
     v["id"].clone()
-}
-
-#[test]
-fn browsing_and_installing_finish_in_the_background() {
-    let dir = TempDir::new("background-plugins");
-    Store::open(dir.path(), config(dir.path()).store()).unwrap().directory().publish(&bundle()).unwrap();
-    let mut server = crate::start(&config(dir.path())).unwrap();
-    let plain = format!("ws://{}/", server.addr());
-    let mut s = session("Bo");
-    let listed = background(&mut s, "plugin.directory.list", json!({"server": plain}));
-    assert_eq!(listed["plugins"][0]["id"], ID);
-    assert_eq!(s.plugins.directory.as_ref().map(|l| l.entries.len()), Some(1), "Browse shows the listing");
-    let sha = listed["plugins"][0]["sha256"].clone();
-    let r = background(&mut s, "plugin.directory.install", json!({"id": ID, "confirm": true, "sha256": sha, "server": plain}));
-    assert_eq!(r["installed"], ID);
-    assert_eq!(s.prefs.plugins.len(), 1);
-    assert!(s.plugins.unsaved, "the app saves the plugin list at once");
-    // Scripts still wait for their answer.
-    assert_eq!(s.execute("plugin.directory.list", &json!({})).unwrap()["plugins"][0]["installed"], "1.0.0");
-    server.stop();
 }
 
 #[test]

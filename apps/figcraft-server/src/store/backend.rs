@@ -1,8 +1,8 @@
 use super::journal::flush_log;
 use super::team::team_admits;
 use super::{
-    Access, Action, Admin, AdminReply, Admission, BUSY_ADMIN, BUSY_DOWNLOADS, Backend, ClientMsg, Closing, Handled, HostInfo, IpAddr, LibraryReply,
-    LibraryReq, OpenFile, PluginReply, PluginReq, Server, Store, disk, hash, now, same_secret,
+    Access, Action, Admin, AdminReply, Admission, BUSY_ADMIN, Backend, ClientMsg, Closing, Handled, HostInfo, IpAddr, LibraryReply,
+    LibraryReq, OpenFile, Server, Store, disk, hash, now, same_secret,
 };
 
 /// Whether `req` changes the server's files (a write, a removal or a join code's stretching):
@@ -279,17 +279,6 @@ impl Backend for Store {
             LibraryReq::ReportAssets(a) => self.report_assets(file, a).map_or_else(failed, |()| LibraryReply::Noted),
             LibraryReq::Assets => self.library_assets(file).map_or_else(failed, LibraryReply::Assets),
         }
-    }
-
-    fn plugins(&mut self, ip: IpAddr, publisher: bool, req: PluginReq) -> PluginReply {
-        // One address's share first (before everyone's budget is spent or anything is read).
-        if let PluginReq::Fetch { id, version } = &req
-            && let Some(size) = self.directory.size_of(id, version.as_deref())
-            && !self.abuse.allow(ip, Action::Download(usize::try_from(size).unwrap_or(usize::MAX)), self.clock())
-        {
-            return PluginReply::Failed { reason: BUSY_DOWNLOADS.into() };
-        }
-        self.directory.handle(publisher, req)
     }
 
     fn resolve(&mut self, ip: IpAddr, code: &str) -> Result<(String, String), String> {

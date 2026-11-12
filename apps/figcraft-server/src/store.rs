@@ -15,7 +15,6 @@
 //!                                archive; `library.bin` from servers before versioned names)
 //! <data>/files/<id>/usage.json   how other files use that library, as their apps report it
 //! <data>/files/<id>/actions.json its components' insertions and detachments week by week
-//! <data>/plugins/                the plugin directory (see `directory`)
 //! <data>/blocked.json            addresses the operator blocked
 //! <data>/reports.json            reports people sent about files
 //! ```
@@ -41,7 +40,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use figcraft_collab::message::{
     Access, Admin, AdminReply, AssetUsage, ClientMsg, Detached, FileDetached, FileInfo, FileRow, FileUsage, HostInfo, LibraryReply, LibraryReq,
-    LinkInfo, MAX_OWNED, NewLink, OwnedFile, PluginReply, PluginReq, ReportInfo, Usage, WeekActions,
+    LinkInfo, MAX_OWNED, NewLink, OwnedFile, ReportInfo, Usage, WeekActions,
 };
 use figcraft_collab::{Change, NodeId, Replica, Server, same_secret};
 use figcraft_collab_net::hub::{Admission, Backend, Closing, Handled, OpenFile, ip_blocks, ip_key};
@@ -51,7 +50,6 @@ use sha2::{Digest, Sha256};
 
 use crate::abuse::{Abuse, AbuseConfig, Action};
 use crate::codes::{self, Sealed};
-use crate::directory::{Directory, DirectoryConfig};
 use crate::disk::{self, ACTIONS, LIBRARY, LINKS, LOG, LOG_HEADER, META, SNAPSHOT, USAGE};
 
 mod backend;
@@ -129,7 +127,6 @@ pub struct StoreConfig {
     pub compact_after: usize,
     pub compact_bytes: u64,
     pub core: figcraft_collab::Limits,
-    pub directory: DirectoryConfig,
     pub hosting: HostingConfig,
     /// Below this much free space on the data directory's disk, changes and new files are
     /// refused (with the reason) rather than half written.
@@ -335,8 +332,6 @@ pub struct Store {
     files: BTreeMap<String, Entry>,
     /// What was skipped at startup or found damaged since, for the operator.
     problems: Vec<String>,
-    /// The plugin directory.
-    directory: Directory,
     /// What addresses may do how often, the ones blocked, and the reports kept.
     abuse: Abuse,
     /// Team library bytes served, everyone together.
@@ -477,7 +472,6 @@ impl Store {
         let key = load_key(root)?;
         let dir = root.join(FILES);
         fs::create_dir_all(&dir).map_err(|e| format!("can't create {}: {e}", dir.display()))?;
-        let (directory, startup_problems) = Directory::open(root, cfg.directory);
         let abuse = Abuse::new(cfg.hosting.abuse);
         let mut store = Store {
             root: root.to_path_buf(),
@@ -485,7 +479,6 @@ impl Store {
             key,
             files: BTreeMap::new(),
             problems: Vec::new(),
-            directory,
             abuse,
             served: figcraft_collab_net::net::Bucket::new(LIBRARY_RATE, LIBRARY_BURST),
             #[cfg(test)]
@@ -501,9 +494,6 @@ impl Store {
             free: None,
             _lock: lock,
         };
-        for problem in startup_problems {
-            store.note(problem);
-        }
         store.scan(&dir);
         store.blocked = store.read_list::<String>(BLOCKED).iter().filter_map(|s| s.parse().ok()).map(ip_key).collect();
         store.reports = store.read_list(REPORTS);
@@ -599,11 +589,6 @@ impl Store {
     pub fn rotate_key(&mut self) -> Result<String, String> {
         self.key = write_key(&self.root)?;
         Ok(self.key.clone())
-    }
-
-    /// The plugin directory.
-    pub fn directory(&mut self) -> &mut Directory {
-        &mut self.directory
     }
 
     /// What was skipped or found damaged.

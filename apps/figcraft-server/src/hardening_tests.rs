@@ -11,7 +11,7 @@ use std::net::{IpAddr, TcpListener};
 use std::time::{Duration, Instant};
 
 use figcraft_collab::message::{
-    Access, Admin, AdminReply, ClientMsg, LibraryReply, LibraryReq, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, PluginReq, ServerMsg, Usage,
+    Access, Admin, AdminReply, ClientMsg, LibraryReply, LibraryReq, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, ServerMsg, Usage,
 };
 use figcraft_collab::sim::Rng;
 use figcraft_collab::{Client, Limits, NoRecompute, Outgoing, Replica, Server};
@@ -133,7 +133,7 @@ fn a_zip_bomb_library_is_refused_before_it_unpacks() {
 #[test]
 fn a_client_that_never_reads_can_queue_only_so_much() {
     let dir = TempDir::new("noread");
-    let cfg = Config { max_file_mb: Some(2), max_plugin_mb: 1, ..open(dir.path()) };
+    let cfg = Config { max_file_mb: Some(2), ..open(dir.path()) };
     let cap = cfg.net().max_queued_bytes;
     assert_eq!(cap, 4 << 20, "the largest message and a margin");
     let view = {
@@ -169,7 +169,7 @@ fn a_client_that_never_reads_can_queue_only_so_much() {
 #[test]
 fn a_file_cant_grow_past_its_cap_through_batches() {
     let dir = TempDir::new("grow");
-    let cfg = Config { max_file_mb: Some(1), max_plugin_mb: 1, ..open(dir.path()) };
+    let cfg = Config { max_file_mb: Some(1), ..open(dir.path()) };
     let max = 1u64 << 20;
     let mut server = crate::start(&cfg).unwrap();
     let addr = server.addr();
@@ -330,13 +330,10 @@ fn messages_are_capped_by_what_the_connection_is_for() {
     let dir = TempDir::new("caps");
     let mut server = crate::start(&open(dir.path())).unwrap();
     let addr = server.addr();
-    // Browsing a plugin directory takes small requests only; the oversized frame is refused and
-    // the connection closed cleanly (its reader isn't asked for the rest of that frame).
+    // The retired distribution handshake is refused before a request can be served.
     let mut raw = Raw::connect(addr);
     raw.send(&ClientMsg::OpenPlugins(OpenPlugins { protocol: PROTOCOL, key: String::new(), client_version: String::new() }));
-    raw.next();
-    raw.send_header(200_000);
-    assert!(matches!(raw.next(), ServerMsg::Refused { reason } if reason.contains("too large") && reason.contains("KiB")));
+    assert!(matches!(raw.next(), ServerMsg::Refused { reason } if reason.contains("distribution has been removed")));
     drop(raw);
     // A joined client whose batch is bigger than a file may be is told the limit.
     let (_, replies) = manage::hosting(
@@ -558,38 +555,6 @@ fn a_file_at_its_cap_is_compacted_at_most_once_a_minute() {
     assert!(store.compactions() - before <= 1, "{} compactions for 50 over-cap batches", store.compactions() - before);
 }
 
-/// A plugin directory with one plugin whose bundle is about `mib` MiB.
-fn plugin_store(dir: &std::path::Path, mib: usize) -> Store {
-    let mut store = Store::open(dir, config(dir).store()).unwrap();
-    let bundle = figcraft_plugin::bundle::Bundle {
-        manifest: crate::directory_tests::manifest("org.example.big", "1.0.0"),
-        wasm: crate::directory_tests::wasm(),
-        assets: vec![figcraft_plugin::bundle::Asset { name: "data.bin".into(), data: vec![9; mib << 20] }],
-    };
-    store.directory().publish(&bundle.encode()).unwrap();
-    store
-}
-
-#[test]
-fn one_address_cant_spend_everyones_plugin_downloads() {
-    let dir = TempDir::new("plugshare");
-    let mut store = plugin_store(dir.path(), 4);
-    let fetch = || PluginReq::Fetch { id: "org.example.big".into(), version: None };
-    let greedy = ip("198.51.100.1");
-    // Its share runs out after a few; then 200 more tries cost nobody else anything.
-    let served =
-        (0..10).take_while(|_| matches!(store.plugins(greedy, false, fetch()), figcraft_collab::message::PluginReply::Bundle { .. })).count();
-    assert!((2..=5).contains(&served), "{served}");
-    for _ in 0..200 {
-        let r = store.plugins(greedy, false, fetch());
-        assert!(matches!(&r, figcraft_collab::message::PluginReply::Failed { reason } if reason == BUSY_DOWNLOADS));
-    }
-    assert!(
-        matches!(store.plugins(ip("198.51.100.2"), false, fetch()), figcraft_collab::message::PluginReply::Bundle { .. }),
-        "others still download"
-    );
-}
-
 #[test]
 fn half_read_messages_count_against_a_reading_budget() {
     let dir = TempDir::new("reading");
@@ -683,7 +648,7 @@ fn wait_for<T>(raw: &mut Raw, what: &str, mut pick: impl FnMut(ServerMsg) -> Opt
 #[test]
 fn an_office_behind_one_address_works_together() {
     let dir = TempDir::new("office");
-    let cfg = Config { max_file_mb: Some(4), max_plugin_mb: 1, ..open(dir.path()) };
+    let cfg = Config { max_file_mb: Some(4), ..open(dir.path()) };
     let mut server = crate::start(&cfg).unwrap();
     let addr = server.addr();
     // A file near the size limit.

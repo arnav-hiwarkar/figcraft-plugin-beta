@@ -1,5 +1,5 @@
 use super::limits::Admission;
-use super::{Access, Admin, AdminReply, ClientMsg, HostInfo, IpAddr, LibraryReply, LibraryReq, PluginReply, PluginReq, Server};
+use super::{Access, Admin, AdminReply, ClientMsg, HostInfo, IpAddr, LibraryReply, LibraryReq, Server};
 
 /// An admin request's reply, and what the hub must do about connections it affects.
 #[derive(Clone, Debug, PartialEq)]
@@ -86,12 +86,6 @@ pub trait Backend: Send + 'static {
     /// [`admit`](Self::admit)).
     fn library(&mut self, _ip: IpAddr, _file: &str, _access: Access, _req: LibraryReq) -> LibraryReply {
         LibraryReply::Failed { reason: "this session is hosted by an app: team libraries live on a figcraft-server".into() }
-    }
-
-    /// A request on a plugin directory connection; `publisher`: it was opened with the right key
-    /// (checked by [`manage`](Self::manage)).
-    fn plugins(&mut self, _ip: IpAddr, _publisher: bool, _req: PluginReq) -> PluginReply {
-        PluginReply::Failed { reason: "this session is hosted by an app: plugin directories live on a figcraft-server".into() }
     }
 
     /// A new connection from `ip` ([`ip_key`]): whether it may go on (why not is shown to the

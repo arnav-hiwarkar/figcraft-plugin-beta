@@ -9,8 +9,7 @@ headless, native only (no web build), and runs on the same platforms as the desk
 There are no user accounts yet: a share link is the access to one file, and the **server key**
 manages files (publishing, links, removal). Accounts and per-person permissions come later. A file
 can also hold a **team library** that other files use through one of its links (see
-[Team libraries](#team-libraries)), and the server can keep a **plugin directory** for the team (see
-[Plugin directory](#plugin-directory)). A server can also be **open to the public**: anyone
+[Team libraries](#team-libraries)). A server can also be **open to the public**: anyone
 publishes without the key and manages their file with its **owner token**, within limits per
 address (see [Running a public server](#running-a-public-server)).
 
@@ -270,37 +269,6 @@ server run the same commands and wait for the answer.
 
 The browser build can't use team libraries yet (it has no library support of its own).
 
-## Plugin directory
-
-The server keeps a directory of plugins ([`plugins.md`](plugins.md#plugin-directories)) on the same
-port as everything else; no other service is involved.
-
-- **Who can do what.** Anyone who can reach the server lists, searches and downloads its plugins
-  (no link or key needed: put the server behind your network or proxy if that's too open). Only
-  whoever has the **server key** publishes and unpublishes, the same key that publishes files: there
-  are no publisher accounts, so give it only to people you trust to put code on your team's
-  machines. A plugin's author is shown as the publisher typed it in the manifest; nothing verifies
-  it.
-- **Publishing.** `figcraft-cli plugin publish FOLDER --server ws://host:47900/` with the key in
-  `FIGCRAFT_SERVER_KEY` (or `?key=` in the address), or `plugin.directory.publish` from the app's
-  scripts and MCP. Each version must be newer than the last (`1.0.0` → `1.0.1`); the server keeps
-  every version until it is unpublished, and lists the latest.
-- **What the server checks** before keeping a bundle: its size (`max_plugin_mb`), that it decodes
-  (an uncompressed format: nothing expands), that its manifest parses and asks for a plugin API this
-  server's FigCraft runs, a version of one to four numbers newer than the one kept, that the module
-  is WebAssembly that compiles and imports only what FigCraft's sandbox provides (it is never run on
-  the server), and that asset names are plain file names. Then the caps: `max_plugins` versions in
-  all and `max_plugins_mb` of bundles.
-- **Downloads** carry the bundle's SHA-256, which the app checks before reading it, and which the
-  server checks again when it reads the bundle back from disk (a damaged one is never sent, and is
-  logged). Downloads share a budget of about 32 MiB a second, so many at once are turned away with
-  "busy" rather than queued in memory.
-- **Moderation** is the operator's: `figcraft-server plugins` lists every plugin and its versions,
-  `figcraft-server plugins remove ID [--version V]` takes a version, or the whole plugin, down (it
-  works on a running server too). Installed copies keep working; users can't tell the server to
-  remove anything without the key.
-- **Turning it off**: `max_plugins = 0`.
-
 ## Managing files and links
 
 | Command | What it does |
@@ -312,8 +280,6 @@ port as everything else; no other service is involved.
 | `figcraft-server links list FILE` | A file's links: id, access, created, label |
 | `figcraft-server links create FILE --access edit\|comment\|view [--label TEXT]` | A new link, printed once |
 | `figcraft-server links revoke FILE LINK` | Revoke a link: it no longer joins, and whoever joined with it is disconnected |
-| `figcraft-server plugins [list]` | The plugin directory: every plugin, its versions, author, access, size and SHA-256 |
-| `figcraft-server plugins remove ID [--version V]` | Unpublish a version of a plugin, or every version |
 | `figcraft-server reports` | What people in files reported to you: when, which file, the link and address they came with, why |
 | `figcraft-server block-ip IP` | Refuse an address (an IPv6 address: its /64) and drop its connections; kept in `blocked.json` |
 | `figcraft-server unblock-ip IP` / `blocked` | Accept it again / list the blocked addresses |
@@ -342,9 +308,6 @@ are errors):
 | `compact_after` | 1000 | Compact a file's log into a new snapshot after this many entries… |
 | `compact_mb` | 16 | …or once its log is this large (MiB) |
 | `max_log_mb` | 64 | Most MiB of recent batches a file in use keeps in memory (and in its snapshot) for apps that reconnect; an app further behind catches up with the whole file. Open to the public, at most a quarter of `max_file_mb` too |
-| `max_plugins` | 500 | Most plugin versions the plugin directory keeps (all plugins together); 0 turns the directory off |
-| `max_plugin_mb` | 16 | Largest plugin bundle, in MiB (at most 32) |
-| `max_plugins_mb` | 1024 | Most MiB of plugin bundles kept |
 | `open_publish` | false | Anyone may publish without the key ([a public server](#running-a-public-server)) |
 | `operator_contact` | (none) | How to reach you about abuse (an email address or a page), shown to people where they publish |
 | `terms_url` | (none) | Your terms of use (`https://…`), linked where people publish |
@@ -381,8 +344,6 @@ behaves as before (blocked addresses, report rates and the limits on
                                archive; library.bin when it was published by an older server)
 <data>/files/<id>/usage.json   which files use that library's components, as their apps report it
 <data>/files/<id>/actions.json its components' insertions and detachments week by week
-<data>/plugins/index.json      the plugin directory: every version kept (manifest fields, size, SHA-256)
-<data>/plugins/<sha256>.bin    a plugin bundle, named by the SHA-256 of its bytes
 <data>/blocked.json            the addresses the operator blocked
 <data>/reports.json            the last 1,000 reports people sent about files
 ```
@@ -406,11 +367,6 @@ file is used, and when the server stops).
   record loses only that end (logged when the file opens). Leftover temporary files are removed.
 - The server key is stored as plain text (on Unix readable by the owner only): whoever can read
   the data directory can read every file anyway. Link tokens are stored only as hashes.
-- An index entry whose bundle is missing or the wrong size is left out at startup and reported;
-  bundles are deleted only when their last version is unpublished. A `plugins/index.json` that
-  can't be read lists nothing and refuses publishing (nothing is written over it) until it is
-  restored or removed.
-
 ## Backups
 
 [`packaging/server/figcraft-backup.timer`](../packaging/server/figcraft-backup.timer) (installed by
@@ -421,7 +377,7 @@ takes, keeps `/var/backups/figcraft-server/figcraft-YYYY-MM-DD.tar.gz` (readable
 the addresses files came from, the reports and the **server key**: keep them, and any copy, as
 private as the server itself.
 
-Copy the data directory (the plugin directory, `plugins/`, included) while the server is stopped,
+Copy the data directory while the server is stopped,
 or take an atomic snapshot of the filesystem it lives on (ZFS, Btrfs, LVM, a VSS shadow copy). A plain copy of a running server's
 directory can catch a file between its snapshot and its log; it restores, but may lose that
 file's changes since its last compaction. To restore, stop the server, put the directory back and
@@ -498,7 +454,7 @@ keeps the key for everything else.
   restarts in `blocked.json`; the operator's own key still gets in from anywhere); anyone in a file
   can report it (**Report this file…** in the Share popover, `collab.report`; ten an hour per
   address), and `figcraft-server reports` lists the reports with the link and address they came
-  from. Plugin directory publishing stays key-only.
+  from.
 - **Your responsibility.** As the operator you answer for what is published on your server: give a
   working abuse contact (`operator_contact`) and terms (`terms_url`), read the reports, and remove
   what breaks your terms or the law where you run it. Files are **not end-to-end encrypted**: TLS
@@ -518,19 +474,19 @@ What someone can do, by what they hold (the server is reached through TLS at the
 
 | Who | Can | Cannot |
 |---|---|---|
-| Anyone who reaches the server, with nothing | Ask about its hosting (open, operator, terms, limits); on an open server publish files within the limits per address and for everyone; list and download the plugin directory; ask `/healthz`; try join codes, within the limits on wrong ones | Join, read or list any file; see links, reports or blocked addresses; use or learn the server key or anyone's token (none are ever sent back; a presented secret is hashed with SHA-256 and the two digests, always the same length, are compared without stopping at the first difference; hashing and the rest of the request still take time that depends on what was sent); publish plugins; spoof their address through `X-Forwarded-For` (believed only from `trusted_proxy`); get past a block |
+| Anyone who reaches the server, with nothing | Ask about its hosting (open, operator, terms, limits); on an open server publish files within the limits per address and for everyone; ask `/healthz`; try join codes, within the limits on wrong ones | Join, read or list any file; see links, reports or blocked addresses; use or learn the server key or anyone's token (none are ever sent back; a presented secret is hashed with SHA-256 and the two digests, always the same length, are compared without stopping at the first difference; hashing and the rest of the request still take time that depends on what was sent); spoof their address through `X-Forwarded-For` (believed only from `trusted_proxy`); get past a block |
 | Someone with a **join code** | Exactly what its link gives (a view code: the view link's row; a comment code: the comment link's; an edit code: the edit link's), until the code or its link is gone | Get a code for any other link; learn anything from a wrong code but that it is wrong |
 | Someone with a file's **view link** | See that file and everyone's changes and presence in it; read its team library and usage; report it | Change it (the server refuses a viewer's edits); reach any other file; manage links |
 | Someone with a file's **comment link** | What a view link gives, and add, reply to, react to, resolve, move and remove that file's comment threads (anyone's: comments are signed with the name in Preferences, there are no accounts) | Change anything else in it (the server refuses a batch that touches more than comment threads); reach any other file; manage links |
 | Someone with a file's **edit link** | Change that file, within its size cap; publish its team library (on a public server only for files published with the key); report it | Reach any other file; grow it past `max_file_mb` or its publisher's share; list, make or revoke links; rename or remove it |
-| Whoever holds a file's **owner token** (published without the key) | List, make and revoke that file's links (disconnecting whoever joined with a revoked one, which is how the app stops sharing), ask for join codes for links whose token they hold, rename it on the server, remove it; ask whether it is still there, its name, link ids and expiry (asking doesn't count as opening it) | Touch any other file, even with its id; tell a file that doesn't exist from one they don't own; list files; read reports; block; anything of the plugin directory |
-| The **operator** (server key, or the machine) | Everything above for every file, reports, blocks, the plugin directory; read every file on disk | Recover a lost link or owner token (only hashes are kept) |
+| Whoever holds a file's **owner token** (published without the key) | List, make and revoke that file's links (disconnecting whoever joined with a revoked one, which is how the app stops sharing), ask for join codes for links whose token they hold, rename it on the server, remove it; ask whether it is still there, its name, link ids and expiry (asking doesn't count as opening it) | Touch any other file, even with its id; tell a file that doesn't exist from one they don't own; list files; read reports; block |
+| The **operator** (server key, or the machine) | Everything above for every file, reports, blocks; read every file on disk | Recover a lost link or owner token (only hashes are kept) |
 
 Limits that hold against everyone: message sizes by what a connection is for, file sizes as they
 grow, connections in all and per address and block, connection, message, publish and download rates
 per address and block, files and MiB per address and for everyone, the bytes queued for slow
 clients and waiting for the server, and idle expiry ([Resource limits](#resource-limits)). A
-library or plugin larger than an address's download burst is still served, only from a full
+library larger than an address's download burst is still served, only from a full
 budget that it then owes, so a large object comes more slowly but never lets an address past its
 rate: over any stretch of time it gets at most the largest object plus the rate times that time. Revoking
 a link or removing a file cuts every connection that used it, library connections included. Not
@@ -555,14 +511,14 @@ are larger.
 
 | Resource | Limit |
 |---|---|
-| Message size | A file's size and 1 MiB (`max_file_mb`, 16 by default when open, or `max_plugin_mb` if larger): checked as the message is read, before anything is decoded; 64 KiB on a connection that only browses plugins (a client sending more is disconnected with the limit as the reason; the app keeps its own copy). On a private server, the larger of that and the core's 64 MiB |
+| Message size | A file's size and 1 MiB (`max_file_mb`, 16 by default when open): checked as the message is read, before anything is decoded. On a private server, the larger of that and the core's 64 MiB |
 | A file as it grows | Every batch is checked first (*always*): past `max_file_mb`, past its publisher's `max_mb_per_ip` or past `max_total_mb`, it is refused with the reason and the app rolls it back. A long log is compacted to make room at most once a minute per file (a compaction rewrites the whole file). A file's snapshot also holds the recent batches kept for reconnecting clients, at most `max_log_mb` and a quarter of `max_file_mb` |
 | Recent batches in memory | A quarter of `max_file_mb` (256 KiB at least) per open file; older ones are dropped (a client that missed them catches up with the whole file) |
 | Bytes queued for slow clients | The largest message and 1 MiB per connection, 32 MiB per block of addresses, 256 MiB for everyone. A message sent to many people counts once for everyone and once per block (twenty colleagues behind one office address cost their block one copy of a broadcast), and welcomes (bounded by the file's size) don't count against blocks, so a whole office can join a file at once. A client that doesn't read its answers is dropped; when everyone's budget runs out, the connection holding the most is dropped |
 | Bytes being read | Messages not yet whole: the largest message and 1 MiB per block, 192 MiB for everyone; past everyone's budget the readers holding the most are cut off until it fits (their bytes count as free at once), and a reader is refused only when it is the biggest |
 | Bytes waiting for the server | 128 MiB of read messages not handled yet: past it a connection is dropped as busy |
-| Connections | `max_connections` (512) in all (*always*); `max_connections_per_ip` (32) per address, ×2 per IPv6 /56 (at most a sixteenth of all), ×4 per /48 (at most an eighth of all), joins included, so no block can take every connection; one-shot requests (asking about hosting, libraries, browsing plugins) can't take the last eighth, which stays for people joining files, and are dropped after 20 idle seconds |
-| Rates | Per address and block: `connects_per_minute`, `publishes_per_hour` (and 32 addresses' worth for everyone), `messages_per_second` (cursors, selections, cursor chat and pings have their own budget beside it, twice that, so an office moving its cursors together doesn't trip it); reports, ten an hour (*always*); requests that change files (join codes, links, renames, removals, blocks, publishing with the key), sixty a minute, with the server key or an owner token too ("too many changes to this server's files from your address…"; listing and looking aren't counted) (*always*); downloads of libraries and plugins, 1 MiB a second with bursts of 16 MiB per address (*always*; a larger one is served once the address's budget is full, which it then pays back at that rate before its next download), checked before anything is read, within 32 MiB a second (512 MiB at once) for libraries and for plugins, everyone together |
+| Connections | `max_connections` (512) in all (*always*); `max_connections_per_ip` (32) per address, ×2 per IPv6 /56 (at most a sixteenth of all), ×4 per /48 (at most an eighth of all), joins included, so no block can take every connection; one-shot requests (asking about hosting, libraries) can't take the last eighth, which stays for people joining files, and are dropped after 20 idle seconds |
+| Rates | Per address and block: `connects_per_minute`, `publishes_per_hour` (and 32 addresses' worth for everyone), `messages_per_second` (cursors, selections, cursor chat and pings have their own budget beside it, twice that, so an office moving its cursors together doesn't trip it); reports, ten an hour (*always*); requests that change files (join codes, links, renames, removals, blocks, publishing with the key), sixty a minute, with the server key or an owner token too ("too many changes to this server's files from your address…"; listing and looking aren't counted) (*always*); downloads of libraries, 1 MiB a second with bursts of 16 MiB per address (*always*; a larger one is served once the address's budget is full, which it then pays back at that rate before its next download), checked before anything is read, within 32 MiB a second (512 MiB at once) for libraries, everyone together |
 | Team libraries | Only files published with the key hold one on a public server; an archive is at most `max_file_mb` and everything it unpacks to counts against the same cap (*always*), so a zip bomb is refused before it expands |
 | Usage reports | Kept in memory, written at most once a minute per library and when the server stops; at most 1,000 components per file and 200 files per library (*always*) |
 | Disk writes | A batch is confirmed only once it is on disk; when its log can't be written, nobody hears it was accepted: the file closes, everyone in it reconnects and their apps send again what wasn't confirmed. Below 1 GiB (or two of the largest files) free, changes and new files are refused with "the server's disk is nearly full" instead (*always*, where the free space can be told: Unix). The server keeps the last 200 problems for the operator |
@@ -581,7 +537,6 @@ operator_contact = "abuse@example.com"
 terms_url = "https://example.com/figcraft-terms"
 idle_days = 30
 max_file_mb = 8
-max_plugin_mb = 8
 max_total_mb = 6144
 max_files_per_ip = 20
 max_mb_per_ip = 256
@@ -825,7 +780,7 @@ sudo systemctl start figcraft-server
 - **Open to the public** (`open_publish`): anyone who reaches the server may ask about it, publish
   a file (within the limits above) and report a file they are in; an owner token manages only its
   own file (its links, its name, removing it). Listing files, other files' links, reports, blocking
-  and the plugin directory's publishing stay with the server key, which also gets in from blocked
+  stay with the server key, which also gets in from blocked
   addresses. The per-address limits trust `X-Forwarded-For` only from `trusted_proxy`; without
   one, every connection counts as its own address.
 - **Transport**: plain `ws://` on the server's port; anyone on the network path can read traffic
@@ -841,12 +796,6 @@ sudo systemctl start figcraft-server
   reports keep at most 1,000 components per file and 200 files per library.
 - **Team libraries**: any link of a file reads its library and its usage reports (file names and
   counts); only an edit link publishes it.
-- **Plugin directory**: anyone who reaches the server reads it; only the server key writes to it.
-  Everything published is checked in full and never run on the server; a bundle's name on disk is
-  its hash, so nothing a publisher chooses reaches the file system; downloads are hash-checked at
-  both ends and share a bandwidth budget. Installing still means trusting the publisher: a plugin
-  runs in FigCraft's sandbox with the permissions its manifest asks for, which the app shows before
-  it installs anything.
 - **Not end-to-end encrypted**: the server reads every file it keeps (it validates and stores them);
   so can its operator.
 - **The machine**: the data directory is made readable by the server's account only and the server

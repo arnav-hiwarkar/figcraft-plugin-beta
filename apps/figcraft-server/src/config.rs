@@ -8,7 +8,6 @@ use figcraft_collab_net::{Endpoint, NetLimits};
 use serde::Deserialize;
 
 use crate::abuse::AbuseConfig;
-use crate::directory::DirectoryConfig;
 use crate::store::{HostingConfig, StoreConfig};
 
 /// The port the server listens on unless told otherwise (the app's sessions try it first too).
@@ -43,12 +42,6 @@ pub struct Config {
     /// Most MiB of recent batches a file in use keeps in memory for apps that reconnect (one
     /// further behind catches up with the whole file).
     pub max_log_mb: u64,
-    /// Most plugin versions the plugin directory keeps (0 turns it off).
-    pub max_plugins: usize,
-    /// Largest plugin bundle, in MiB.
-    pub max_plugin_mb: u64,
-    /// Most MiB of plugin bundles kept.
-    pub max_plugins_mb: u64,
     /// Anyone may publish a file without the server key (and gets an owner token for it): a
     /// server open to the public. The limits below then apply per address.
     pub open_publish: bool,
@@ -96,9 +89,6 @@ impl Default for Config {
             compact_after: 1000,
             compact_mb: 16,
             max_log_mb: 64,
-            max_plugins: 500,
-            max_plugin_mb: 16,
-            max_plugins_mb: 1024,
             open_publish: false,
             operator_contact: String::new(),
             terms_url: String::new(),
@@ -260,8 +250,6 @@ impl Config {
             ("compact_after", self.compact_after as u64),
             ("compact_mb", self.compact_mb),
             ("max_log_mb", self.max_log_mb),
-            ("max_plugin_mb", self.max_plugin_mb),
-            ("max_plugins_mb", self.max_plugins_mb),
         ] {
             if v == 0 {
                 return Err(format!("`{name}` must be at least 1"));
@@ -269,13 +257,6 @@ impl Config {
         }
         if self.file_mb() > 4096 || self.compact_mb > 4096 || self.max_log_mb > 4096 {
             return Err("sizes are in MiB and at most 4096".into());
-        }
-        // A bundle travels in one message (at most 64 MiB) next to its entry.
-        if self.max_plugin_mb > 32 {
-            return Err("`max_plugin_mb` is at most 32".into());
-        }
-        if self.max_plugins > 10_000 || self.max_plugins_mb > 1 << 20 {
-            return Err("`max_plugins` is at most 10000 and `max_plugins_mb` at most 1048576".into());
         }
         Ok(())
     }
@@ -310,22 +291,17 @@ impl Config {
             compact_after: self.compact_after,
             compact_bytes: mib(self.compact_mb),
             core: self.core(),
-            directory: DirectoryConfig {
-                max_plugins: self.max_plugins,
-                max_plugin_bytes: mib(self.max_plugin_mb),
-                max_total_bytes: mib(self.max_plugins_mb),
-            },
             // At least 1 GiB, and room for two of the largest files (a compaction writes one beside
             // the old one).
             min_free_bytes: mib(self.file_mb().saturating_mul(2)).max(1 << 30),
         }
     }
 
-    /// Largest message a client may send: a whole file (or plugin bundle) and a margin. Open to the
+    /// Largest message a client may send: a whole file and a margin. Open to the
     /// public this is also the cap (strangers' files stay small); a private server never goes below
     /// the core's 64 MiB, and a `max_file_mb` above it raises the cap with it.
     fn open_message(&self) -> usize {
-        usize::try_from(self.file_mb().max(self.max_plugin_mb).saturating_add(1).saturating_mul(1 << 20)).unwrap_or(usize::MAX)
+        usize::try_from(self.file_mb().saturating_add(1).saturating_mul(1 << 20)).unwrap_or(usize::MAX)
     }
 
     /// The collaboration core's part: the batches kept for reconnecting clients (in memory, and
