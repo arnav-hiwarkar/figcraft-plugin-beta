@@ -106,3 +106,71 @@ impl Worker {
         Ok(rx)
     }
 }
+
+pub mod runtime;
+pub use runtime::{Runtime, activate, manager, runtime};
+
+/// Refreshes the catalogue and kill list in the background when the last refresh is older than six
+/// hours (B8). Call at startup and periodically; the store change reaches GrantView on next read.
+pub fn refresh_in_background() {
+    if safe_mode() {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("figcraft-plugin-refresh".into()).spawn(|| {
+        let Ok(m) = manager() else { return };
+        let now = craft_ext_store::store::now();
+        let last = m.store.state().map(|s| s.last_refresh).unwrap_or(0);
+        if now.saturating_sub(last) < 6 * 3600 {
+            return;
+        }
+        if let Err(e) = m.refresh(now) {
+            log::info!("plugins: catalogue refresh failed: {e}");
+        }
+    });
+}
+
+/// `figcraft-cli plugin …`: `plugin contract` prints the contract reference, `plugin project <file>`
+/// prints the project's plugin statuses (never downloads); the rest goes to the shared library.
+pub fn run_cli(args: &[String], project: Option<&[craft_ext_core::project::PluginRef]>, out: &mut dyn std::io::Write, err: &mut dyn std::io::Write) -> i32 {
+    if args.first().is_some_and(|a| a == "contract") {
+        return match contract() {
+            Ok(c) => i32::from(write!(out, "{}", c.to_markdown()).is_err()),
+            Err(e) => {
+                let _ = writeln!(err, "error: {e}");
+                1
+            }
+        };
+    }
+    let m = match manager() {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = writeln!(err, "error: {e}");
+            return 1;
+        }
+    };
+    if let Some(refs) = project {
+        return match m.check_project(refs) {
+            Ok(statuses) => {
+                let rows: Vec<Value> = statuses.iter().map(|(r, s)| serde_json::json!({"id": r.id.as_str(), "name": r.name, "version": r.version.to_string(), "status": format!("{s:?}")})).collect();
+                let json = args.iter().any(|a| a == "--json");
+                i32::from(craft_ext_cli::emit(out, &Value::Array(rows), json).is_err())
+            }
+            Err(e) => {
+                let _ = writeln!(err, "error: {e}");
+                1
+            }
+        };
+    }
+    craft_ext_cli::run_plugin(&m, args, out, err)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn plugin_contract_prints_the_contract_markdown() {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(super::run_cli(&["contract".into()], None, &mut out, &mut err), 0);
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("FigCraft") && text.contains("node.create"), "{text}");
+    }
+}

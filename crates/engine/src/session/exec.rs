@@ -45,7 +45,7 @@ impl Session {
     }
 
     /// Commit events buffered by a successful group.
-    pub(super) fn flush_pending_events(&mut self) {
+    pub(crate) fn flush_pending_events(&mut self) {
         let pending = std::mem::take(&mut self.pending_events);
         for (kind, document, path, data) in pending {
             self.events.push(&kind, &document, path.as_deref(), data);
@@ -69,6 +69,10 @@ impl Session {
     /// Run a command by id. Mutations become one undo step; a failure or panic leaves the document
     /// as it was.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        if let Some(rt) = self.plugins.clone() {
+            if rt.commands().iter().any(|c| c.id == id) { return rt.run_command(self, id, params); }
+            if rt.busy() { return Err(EngineError::Other("a plugin gesture is in progress".into())); }
+        }
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         crate::cmd::refuse_unknown_params(id, params)?;
         board::refuse_on_board(self, id)?;

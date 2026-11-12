@@ -1032,6 +1032,18 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
 
 [[package]]
+name = "craft-ext-cli"
+version = "0.1.0"
+dependencies = [
+ "craft-ext-core",
+ "craft-ext-store",
+ "serde",
+ "serde_json",
+ "toml",
+ "ureq",
+]
+
+[[package]]
 name = "craft-ext-core"
 version = "0.1.0"
 dependencies = [
@@ -1061,7 +1073,17 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "ureq",
  "zip 9.1.1",
+]
+
+[[package]]
+name = "craft-ext-ui"
+version = "0.1.0"
+dependencies = [
+ "craft-ext-core",
+ "craft-ext-store",
+ "egui",
 ]
 
 [[package]]
@@ -1918,6 +1940,7 @@ dependencies = [
  "figcraft-collab-net",
  "figcraft-engine",
  "figcraft-format",
+ "figcraft-plugins",
  "figcraft-text",
  "figcraft-ui-egui",
  "fmv-macos-events",
@@ -1946,6 +1969,7 @@ dependencies = [
  "figcraft-engine",
  "figcraft-format",
  "figcraft-mcp",
+ "figcraft-plugins",
  "figcraft-render",
  "figcraft-svg",
  "figcraft-text",
@@ -2007,6 +2031,7 @@ dependencies = [
 name = "figcraft-doc"
 version = "0.18.1"
 dependencies = [
+ "craft-ext-core",
  "figcraft-color",
  "figcraft-geom",
  "imbl",
@@ -2127,9 +2152,13 @@ dependencies = [
 name = "figcraft-plugins"
 version = "0.18.1"
 dependencies = [
+ "craft-ext-cli",
  "craft-ext-core",
  "craft-ext-host",
  "craft-ext-store",
+ "figcraft-doc",
+ "figcraft-engine",
+ "log",
  "serde_json",
 ]
 
@@ -2215,6 +2244,9 @@ version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "craft-ext-core",
+ "craft-ext-store",
+ "craft-ext-ui",
  "craft-ui",
  "craft-update",
  "egui",
@@ -2226,6 +2258,7 @@ dependencies = [
  "figcraft-geom",
  "figcraft-layout",
  "figcraft-pathops",
+ "figcraft-plugins",
  "figcraft-render",
  "figcraft-text",
  "image",

@@ -40,3 +40,8 @@ egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-update = { workspace = true }
+# Craft plugins: runtime, shared manager UI, project prompt and plugin UI trees (native only).
+figcraft-plugins = { workspace = true }
+craft-ext-core = { workspace = true }
+craft-ext-store = { workspace = true }
+craft-ext-ui = { workspace = true }

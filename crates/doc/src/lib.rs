@@ -192,6 +192,8 @@ impl ImageData {
 /// A whole design file.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<craft_ext_core::project::PluginRef>,
     pub name: String,
     /// A design file or a board (files from before boards are design files).
     #[serde(default, skip_serializing_if = "FileKind::is_design")]
@@ -293,6 +295,7 @@ impl Document {
             vote: None,
             votes: BTreeMap::new(),
             vote_history: Vec::new(),
+            plugins: Vec::new(),
         }
     }
 

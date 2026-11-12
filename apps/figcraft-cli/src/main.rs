@@ -91,6 +91,7 @@ fn run(cli: Cli) -> CliResult<ExitCode> {
         }
         // `--attach` conflicts with the roots: the app runs the commands, only its own roots can confine them.
         Command::Mcp(a) => mcp(a.attach.as_deref(), a.timeout, roots_of(&a.roots)?),
+        Command::Plugin(a) => plugin(&a.args),
         Command::Connect { command: ConnectCommand::Publish(a) } => confined(&a.roots, || files::connect_publish(&a.file, &a.mappings, a.dry_run)),
         Command::Perf(a) => {
             let sizes: Vec<usize> = a.layers.into_iter().map(|n| n.clamp(10, 2_000_000)).collect();
@@ -144,4 +145,18 @@ fn mcp(attach: Option<&str>, timeout: Option<u64>, roots: Option<figcraft_engine
     let stdout = std::io::stdout();
     server.serve(stdin.lock(), stdout.lock()).map_err(|e| format!("stdio: {e}"))?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// `plugin …`: management through the shared library. Opening a project for its statuses never
+/// downloads or runs plugin code.
+fn plugin(args: &[String]) -> CliResult<ExitCode> {
+    let doc = match (args.first().map(String::as_str), args.get(1)) {
+        (Some("project"), Some(file)) => Some(files::load(file)?),
+        (Some("project"), None) => return Err(CliError::Usage("plugin project needs a FILE".into())),
+        _ => None,
+    };
+    let rest: Vec<String> = if doc.is_some() { args[2..].to_vec() } else { args.to_vec() };
+    let (mut out, mut err) = (std::io::stdout().lock(), std::io::stderr().lock());
+    let code = figcraft_plugins::run_cli(&rest, doc.as_ref().map(|d| d.plugins.as_slice()), &mut out, &mut err);
+    Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
 }

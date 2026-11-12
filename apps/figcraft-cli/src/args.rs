@@ -42,6 +42,16 @@ pub enum Command {
         command: ConnectCommand,
     },
     Perf(PerfArgs),
+    Plugin(PluginArgs),
+}
+
+/// Manage Craft plugins (list, install, enable, grant …); `plugin contract` prints FigCraft's
+/// plugin contract and `plugin project FILE` lists a design file's plugins and their statuses
+#[derive(Args)]
+pub struct PluginArgs {
+    /// The plugin subcommand and its arguments (`plugin help` lists them)
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+    pub args: Vec<String>,
 }
 
 /// The folders a file subcommand may touch. Without either flag it reads and writes as the user

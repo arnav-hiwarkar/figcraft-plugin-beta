@@ -272,7 +272,12 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
             ds.view.cy += (dh / 2.0 + f64::from(rect.min.y - old_rect.min.y)) / z;
         }
     }
-    let own_cursor = input(app, ui, &resp);
+    // A selected plugin tool takes the canvas pointer (its gesture is one undo step).
+    #[cfg(not(target_arch = "wasm32"))]
+    let plugin_tool = crate::plugins_ui::canvas_input(app, ui, &resp);
+    #[cfg(target_arch = "wasm32")]
+    let plugin_tool = false;
+    let own_cursor = !plugin_tool && input(app, ui, &resp);
     // A browser names no dragged file until the drop, so documents there still say "import", or
     // in Dev Mode show the Dev Mode note, though they open when dropped.
     let documents = ctx.input(|i| i.raw.hovered_files.iter().all(|f| f.path.as_deref().is_some_and(crate::is_document)));
@@ -373,6 +378,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     crate::board_connect::show(app, &ctx);
     crate::board_facilitate::show(app, &ctx, rect);
     crate::selection_spacing::draw(app, &painter);
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::plugins_ui::draw_overlay(app, &painter);
     crate::comments::draw(app, &painter);
     crate::live_text::draw(app, &painter);
     crate::live::draw(app, &painter, &ctx);

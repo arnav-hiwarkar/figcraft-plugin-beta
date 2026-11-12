@@ -111,7 +111,10 @@ pub use session::Forward;
 pub use view_state::ViewState;
 
 /// The editing session: open documents, the current tool, clipboard and prefs.
+pub mod ext;
+
 pub struct Session {
+    pub plugins: Option<Arc<dyn ext::PluginRuntime>>,
     pub docs: Vec<DocState>,
     pub active: usize,
     pub clipboard: Clipboard,

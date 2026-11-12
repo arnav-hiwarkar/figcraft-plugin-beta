@@ -181,6 +181,8 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
         mode_switcher(app, ui, x, cy, t);
     }
     ui.set_clip_rect(outer_clip);
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::plugins_ui::tool_strip(app, ui, rect, t);
     help_button(app, ui, canvas, rect, t);
 }
 

@@ -200,6 +200,8 @@ impl FigApp {
             windows::repaint_others(self, &ctx);
         }
         windows::show(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::plugins_ui::show(self, &ctx);
         // The injected batch was applied by the frame that took it. A discarded sizing pass keeps
         // its acknowledgement for the presented pass but never replays the input (its side effects
         // already happened and would otherwise duplicate).
@@ -232,6 +234,9 @@ impl FigApp {
         let paste = shortcuts::paste_events(self, &ctx);
         // A dialog that closed acts first, in the window it was opened from.
         self.poll_dialog(&ctx);
+        // Plugin requests, app events and the plugin tool's Escape, before shortcuts and widgets.
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::plugins_ui::frame(self, &ctx);
         // Control requests run first so their results reflect this frame.
         crate::control::drain(self, &ctx);
         windows::requests(self, &ctx);

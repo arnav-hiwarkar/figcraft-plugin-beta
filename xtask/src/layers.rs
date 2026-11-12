@@ -23,6 +23,8 @@ const TABLE: &[(&str, u8)] = &[
     ("mcp", 6),
     // Live sessions over the network (WebSockets): above the engine, beside the UI.
     ("collab-net", 6),
+    // Craft plugin runtime (wasm/native workers, shared store): above the engine, beside the UI.
+    ("plugins", 6),
 ];
 
 /// Networking crates: only L6 (`collab-net`) may use them.
@@ -71,5 +73,5 @@ pub fn check(root: &std::path::Path) -> bool {
 fn same_layer_ok(from: &str, to: &str) -> bool {
     // Within L0: color uses geom types; within L2: text/layout/pathops/collab are independent;
     // within L6 the MCP server joins live sessions through collab-net.
-    matches!((from, to), ("figcraft-color", "figcraft-geom") | ("figcraft-render", "figcraft-format") | ("figcraft-mcp", "figcraft-collab-net"))
+    matches!((from, to), ("figcraft-color", "figcraft-geom") | ("figcraft-render", "figcraft-format") | ("figcraft-mcp", "figcraft-collab-net") | ("figcraft-ui-egui", "figcraft-plugins"))
 }

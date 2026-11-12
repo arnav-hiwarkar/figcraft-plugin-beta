@@ -65,6 +65,6 @@ pub fn contract() -> Result<AppContract, OpError> {
         .into_iter()
         .map(|(kind, summary)| SlotSpec { kind, summary })
         .collect(),
-        notes: "Adapter foundation only: document receiver and UI integration are pending; see FigCraft docs/plugin-migration.md. Coordinates are document units. No raster.filter contract is advertised until image-effect dispatch is integrated. Font/theme activation is pending. node.get/update/delete currently require document scope; selected-target authorization must use host-captured scope, never guest flags.",
+        notes: "Each event is one undo step labelled \"<label> · <plugin>\"; a failed, timed-out or revoked event rolls back. Tool gestures (begin..commit) are one step; cancel rolls back. Coordinates are document units. No raster.filter contract is advertised until image-effect dispatch is integrated. Font/theme activation is pending. node.get/update/delete currently require document scope; selected-target authorization must use host-captured scope, never guest flags.",
     })
 }

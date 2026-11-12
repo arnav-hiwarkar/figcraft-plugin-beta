@@ -26,6 +26,8 @@ pub mod icons;
 pub mod live;
 pub mod menus;
 pub mod pending_open;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod plugins_ui;
 pub mod popover;
 pub mod present;
 pub mod shortcuts;

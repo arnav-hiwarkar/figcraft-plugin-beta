@@ -276,6 +276,11 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
                     t.text_secondary,
                 );
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                ui.add_space(8.0);
+                crate::plugins_ui::preferences_row(ui);
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.label(tr("Your name"));

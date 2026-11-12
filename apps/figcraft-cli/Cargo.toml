@@ -21,6 +21,7 @@ figcraft-text = { workspace = true }
 figcraft-svg = { workspace = true }
 figcraft-format = { workspace = true }
 figcraft-mcp = { workspace = true }
+figcraft-plugins = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
 thiserror = { workspace = true }

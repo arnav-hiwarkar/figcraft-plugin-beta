@@ -12,4 +12,9 @@ workspace = true
 craft-ext-core.workspace = true
 craft-ext-host.workspace = true
 craft-ext-store.workspace = true
+craft-ext-cli.workspace = true
 serde_json.workspace = true
+
+figcraft-engine.workspace = true
+figcraft-doc.workspace = true
+log.workspace = true

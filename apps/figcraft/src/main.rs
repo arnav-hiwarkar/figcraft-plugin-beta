@@ -234,6 +234,11 @@ fn main() -> eframe::Result {
     if session.docs.is_empty() && opens_new_file(first_run, session.prefs.start_on_home, port.is_some()) {
         let _ = session.execute("file.new", &json!({}));
     }
+    // Craft plugins: enabled contributions load once startup files are open (FIGCRAFT_SAFE_MODE=1
+    // attaches the runtime without running plugin code). The catalogue refreshes from the first frame.
+    if let Err(e) = figcraft_plugins::activate(&mut session) {
+        log::warn!("plugins: {e}");
+    }
     // The interface language from the first frame on, and for the message when the window can't
     // open (no frame then).
     figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());

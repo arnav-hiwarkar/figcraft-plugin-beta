@@ -260,6 +260,10 @@ pub fn available(id: &str) -> bool {
 /// Draw one level of the main menu: `prefix` is the menu path ("File", "Edit/Copy as").
 fn menu_level(app: &mut FigApp, ui: &mut Ui, prefix: &str) -> bool {
     let t = Tokens::get(ui.ctx());
+    #[cfg(not(target_arch = "wasm32"))]
+    if prefix == "Plugins" {
+        return crate::plugins_ui::menu(app, ui, &t);
+    }
 
     let mut clicked = None;
     let mut subs: Vec<String> = Vec::new();
@@ -365,6 +369,9 @@ const TOP_MENUS: &[&str] = &[
     tr_noop("Vector"),
     tr_noop("Preferences"),
     tr_noop("Libraries"),
+    // Craft plugins (native only): Manage plugins…, panels, and Plugins ▸ <plugin> ▸ <label>.
+    #[cfg(not(target_arch = "wasm32"))]
+    tr_noop("Plugins"),
     tr_noop("Help"),
 ];
 
