@@ -491,7 +491,7 @@ fn recording_worker(f: &Fixture, calls: impl Fn(&Value) -> Vec<(String, Value)> 
     let log = seen.clone();
     let handle = std::thread::spawn(move || {
         for job in rx {
-            lock(&log).push(job.event.clone());
+            let event = job.event.clone();
             let kinds = std::iter::once(Kind::Begin)
                 .chain(calls(&job.event).into_iter().map(|(op, a)| Kind::Call(op, a)))
                 .chain(std::iter::once(Kind::Finish(true)));
@@ -499,6 +499,8 @@ fn recording_worker(f: &Fixture, calls: impl Fn(&Value) -> Vec<(String, Value)> 
             for kind in kinds {
                 let _ = bridge.ask(&job.inv, kind);
             }
+            // Record only after the transaction ends, so a test waiting on the log never races it.
+            lock(&log).push(event);
             // Notifications are delivered without waiting, so their receiver may be gone.
             let _ = job.done.send(Ok(()));
         }
@@ -700,7 +702,8 @@ fn document_changed_follows_content_not_selection_view_or_rollback_and_wakes_the
     // node.create selects the new node by default; keep it unselected so selecting it is a change.
     let id = s.execute("node.create", &json!({"type":"rectangle","width":20,"height":20,"select":false})).unwrap()["id"].clone();
     f.rt.pump(&mut s);
-    serve_until(&f, &mut s, || woken.load(Ordering::Relaxed) > 0 && !names(&seen).is_empty() && lock(&f.rt.deferred).is_empty());
+    // The first pump sends document.opened, selection.changed and page.changed, in that order.
+    serve_until(&f, &mut s, || woken.load(Ordering::Relaxed) > 0 && names(&seen).iter().any(|n| n == "page.changed") && lock(&f.rt.deferred).is_empty());
     assert!(woken.load(Ordering::Relaxed) > 0, "a queued worker request wakes the UI");
     assert!(!f.rt.wants_pump(&s), "nothing left to deliver");
     lock(&seen).clear();
