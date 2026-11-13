@@ -421,3 +421,14 @@ fn form_patches_are_staged_atomic_and_revision_checked() {
     assert_eq!(values["amount"], craft_ext_core::form::Value::Number(5.0));
     assert_eq!(st.surfaces[&k].view.rev, 3);
 }
+
+#[test]
+fn selection_set_maps_to_the_engine_select_command() {
+    let f = Fixture::new();
+    let mut s = Session::new();
+    let id = s.execute("node.create", &json!({"type":"rectangle","select":false})).unwrap()["id"].as_u64().unwrap();
+    let (replies, done) = f.dispatch(&mut s, vec![("selection.set", json!({"ids":[id]}))], true);
+    assert!(replies[1].is_ok(), "{:?}", replies[1]);
+    assert!(done.is_ok());
+    assert_eq!(s.selection(), [figcraft_doc::NodeId(id)]);
+}

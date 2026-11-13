@@ -188,6 +188,10 @@ Runs commands in a headless session (a new document, or `--in`), printing one JS
 {"command":"frame.create","ok":true,"result":{"id":2},"step":0}
 ```
 
+`--plugins` first loads the Craft plugins set up for FigCraft (`plugin setup …`), so steps can run
+their commands, `plugin.<id>.<contribution>`. Without it no plugin code runs; with
+`FIGCRAFT_SAFE_MODE=1` nothing loads either.
+
 The whole script is **one undo step**, and it is **all-or-nothing**, exactly like running the same
 commands through `command.batch` (the MCP tool `batch`, the control channel, plugins). A step key
 other than `command`, `params` and `as`, or a parameter the command's doc (`figcraft-cli commands`)

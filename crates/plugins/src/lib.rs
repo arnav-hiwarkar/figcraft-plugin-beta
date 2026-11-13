@@ -159,7 +159,20 @@ pub fn run_cli(args: &[String], project: Option<&[craft_ext_core::project::Plugi
     if let Some(refs) = project {
         return match m.check_project(refs) {
             Ok(statuses) => {
-                let rows: Vec<Value> = statuses.iter().map(|(r, s)| serde_json::json!({"id": r.id.as_str(), "name": r.name, "version": r.version.to_string(), "status": format!("{s:?}")})).collect();
+                let rows: Vec<Value> = statuses
+                    .iter()
+                    .map(|(r, s)| {
+                        // `status` (ready, needs-enable, needs-other-version, downloadable, unavailable) and its
+                        // fields (reason, installed, wanted) come from the shared Status; `version` is the saved one.
+                        let mut row = serde_json::json!({"id": r.id.as_str(), "name": r.name, "ready": s.ready(),
+                            "install": format!("plugin install {} --version ={}", r.id, r.version), "setup": format!("plugin setup {} --all", r.id)});
+                        if let (Some(o), Ok(Value::Object(status))) = (row.as_object_mut(), serde_json::to_value(s)) {
+                            o.extend(status);
+                            o.insert("version".into(), Value::String(r.version.to_string()));
+                        }
+                        row
+                    })
+                    .collect();
                 let json = args.iter().any(|a| a == "--json");
                 i32::from(craft_ext_cli::emit(out, &Value::Array(rows), json).is_err())
             }

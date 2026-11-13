@@ -419,7 +419,7 @@ pub fn parse_script(text: &str) -> Result<Vec<BatchStep>, String> {
 /// file is refused before it is read (#1114).
 pub const MAX_SCRIPT: u64 = 1 << 30;
 
-pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliResult<ExitCode> {
+pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>, plugins: bool) -> CliResult<ExitCode> {
     let bytes = figcraft_engine::file_access::read_capped(script, MAX_SCRIPT).map_err(|e| CliError::Failed(e.to_string()))?;
     let text = String::from_utf8(bytes).map_err(|_| CliError::Failed(format!("{script}: not UTF-8")))?;
     let steps = parse_script(&text).map_err(|e| CliError::Failed(format!("{script}: {e}")))?;
@@ -432,6 +432,10 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
         }
         None => (Session::new(), 0),
     };
+    if plugins {
+        // Loads and initialises the enabled plugins (none in FIGCRAFT_SAFE_MODE=1).
+        figcraft_plugins::activate(&mut s).map_err(|e| CliError::Failed(format!("plugins: {e}")))?;
+    }
     // One undo step and all-or-nothing, the way the same commands behave through `command.batch`
     // (MCP, the control channel, plugins): `{"$step": n}` and `{"$ref": "name"}` resolve against the
     // steps before it, and a step that fails takes the whole script back instead of leaving the
@@ -514,7 +518,7 @@ mod tests {
         std::fs::write(&svg, r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>"#).unwrap();
         std::fs::write(&script, r#"[{"command":"no.such\u001b"}]"#).unwrap();
         assert_eq!(info(svg.to_str().unwrap(), false).unwrap(), ExitCode::SUCCESS);
-        assert_eq!(run_script(script.to_str().unwrap(), None, None).unwrap(), ExitCode::from(1));
+        assert_eq!(run_script(script.to_str().unwrap(), None, None, false).unwrap(), ExitCode::from(1));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -612,7 +616,7 @@ mod tests {
             bad.push("/dev/zero".into());
         }
         for path in bad {
-            let Err(CliError::Failed(e)) = run_script(&path, None, None) else { panic!("{path} ran") };
+            let Err(CliError::Failed(e)) = run_script(&path, None, None, false) else { panic!("{path} ran") };
             assert!(e.contains("is a folder, not a file") || e.contains("isn't a regular file"), "{path}: {e}");
         }
         std::fs::remove_dir_all(dir).unwrap();
@@ -670,7 +674,7 @@ mod tests {
         )
         .unwrap();
         let out = dir.join("out.figcraft");
-        run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap())).unwrap();
+        run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap()), false).unwrap();
 
         let mut s = Session::empty();
         s.execute("file.open", &json!({"path": out.to_str().unwrap()})).unwrap();
@@ -700,7 +704,7 @@ mod tests {
         )
         .unwrap();
         let out = dir.join("out.figcraft");
-        run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap())).unwrap();
+        run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap()), false).unwrap();
 
         let mut s = Session::empty();
         s.execute("file.open", &json!({"path": out.to_str().unwrap()})).unwrap();
@@ -717,7 +721,7 @@ mod tests {
         let dir = temp_dir("run-dup-name");
         let script = dir.join("script.json");
         std::fs::write(&script, r#"[{"command": "select.none", "as": "a"}, {"command": "select.none", "as": "a"}]"#).unwrap();
-        let Err(CliError::Failed(e)) = run_script(script.to_str().unwrap(), None, None) else { panic!("a name twice must fail") };
+        let Err(CliError::Failed(e)) = run_script(script.to_str().unwrap(), None, None, false) else { panic!("a name twice must fail") };
         assert!(e.contains("step 1: `as` \"a\" is already step 0's name"), "{e}");
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -737,7 +741,7 @@ mod tests {
         .unwrap();
         let out = dir.join("out.figcraft");
         // The failure is the script's, not the call's: the CLI reports it and exits non-zero.
-        run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap())).unwrap();
+        run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap()), false).unwrap();
         assert!(!out.exists(), "a script that failed writes nothing");
         std::fs::remove_dir_all(dir).unwrap();
     }

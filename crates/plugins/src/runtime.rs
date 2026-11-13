@@ -201,7 +201,7 @@ impl Runtime {
             "viewport.get"=>serde_json::to_value(&s.ds().map_err(err)?.view).map_err(err),
             "node.get"=> { let id=node_id(&a)?; s.doc().map_err(err)?.node(id).ok_or_else(||err("node missing")).and_then(|n|serde_json::to_value(n).map_err(err)) },
             "node.create"|"node.update"|"node.delete"|"selection.set"=> {
-                let command=match op { "node.update"=>"node.set","node.delete"=>"edit.delete",other=>other };
+                let command=match op { "node.update"=>"node.set","node.delete"=>"edit.delete","selection.set"=>"select.set",other=>other };
                 if op=="node.delete" { let id=node_id(&a)?; if s.doc().map_err(err)?.node(id).is_none() {return Err(err("node missing"));} s.ds_mut().map_err(err)?.selection=vec![id]; }
                 let mut a=a; if op=="node.update" { if let Some(props)=a.get("props").cloned() { a=json!({"ids":[node_id(&a)?],"props":props}); } }
                 let rt=s.plugins.take(); let out=s.execute(command,&a).map_err(err); s.plugins=rt; out
@@ -340,3 +340,7 @@ impl PluginRuntime for Runtime {
 #[cfg(test)]
 #[path = "runtime_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "shapes_e2e_tests.rs"]
+mod shapes_e2e;

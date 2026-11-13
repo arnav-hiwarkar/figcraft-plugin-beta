@@ -119,3 +119,15 @@ figcraft-ui-egui; wasm32 UI check passed with egui/web_file. The plugin test sui
 passed all 14 tests, including atomic/stale form patches and hide/show restoration.
 No application run, workspace tests, clippy, or commit was performed; visual behavior
 has not been inspected in a running application.
+
+## Runtime verification (real package)
+
+The `figcraft-shapes` example (`craft-extensions/examples/figcraft-shapes`) was built to wasm, packed,
+installed and run through this adapter by the ignored acceptance test `shapes_example_end_to_end`
+(`FIGCRAFT_SHAPES_PACKAGE=…`; see [plugin-testing.md](plugin-testing.md)): panel form, one-step command,
+recoverable revocation and mid-gesture rollback, tool commit/cancel with overlay, save/reopen statuses and
+uninstall keeping layers. Fixed on the way: `selection.set` now maps to the engine's `select.set` (it
+named a command that does not exist); `plugin project` prints the shared status (`ready`, `reason`, …)
+instead of Rust debug text; the contract carries real summaries, arguments and results and the shared
+page is regenerated from it. `figcraft-cli run --plugins` runs plugin commands headlessly.
+Panels start closed; they open from their title in the Plugins menu.

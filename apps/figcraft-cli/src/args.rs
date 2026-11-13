@@ -188,6 +188,10 @@ pub struct RunArgs {
     /// Save the result here, by extension
     #[arg(long, value_name = "FILE")]
     pub out: Option<String>,
+    /// Load the Craft plugins set up for FigCraft so the script can run `plugin.<id>.<contribution>`
+    /// commands (off by default: without it no plugin code runs)
+    #[arg(long)]
+    pub plugins: bool,
     #[command(flatten)]
     pub roots: RootArgs,
 }

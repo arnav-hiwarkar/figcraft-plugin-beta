@@ -127,8 +127,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         }
         window.show(ctx, |ui| match sf.tree.as_ref().and_then(|t| serde_json::from_value::<Node>(t.clone()).ok()) {
             Some(node) => {
-                let mut out = Vec::new();
-                node_ui(ui, &sf.key, sf.rev, &node, 0, &mut out);
+                let out = render_surface(ui, &sf.key, sf.rev, &node);
                 events.extend(out.into_iter().map(|(w, v)| (sf.key.clone(), sf.rev, w, v)));
             }
             None => {
@@ -323,6 +322,15 @@ pub fn draw_overlay(app: &FigApp, painter: &egui::Painter) {
 
 /// Deepest tree drawn; `Node::validate` bounds trees, this keeps the renderer bounded regardless.
 const MAX_DEPTH: usize = 32;
+
+/// The one renderer seam for plugin panels and windows: draws a validated UI tree (including
+/// `Node::Form`) and returns the widget changes as (widget id or form parameter key, value). Today
+/// this is egui; swapping in craft-framework's `render_form`/components replaces only this function.
+pub fn render_surface(ui: &mut Ui, key: &str, rev: u64, tree: &Node) -> Vec<(String, Value)> {
+    let mut out = Vec::new();
+    node_ui(ui, key, rev, tree, 0, &mut out);
+    out
+}
 
 /// Draws one tree; widget changes are pushed to `out` as (widget id, value). Sliders and text
 /// fields keep their edit state per widget until released/committed, so a redraw with a new
