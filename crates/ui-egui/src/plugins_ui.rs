@@ -333,6 +333,8 @@ fn node_ui(ui: &mut Ui, key: &str, rev: u64, n: &Node, depth: usize, out: &mut V
     }
     let kids = |ui: &mut Ui, children: &[Node], out: &mut Vec<(String, Value)>| children.iter().for_each(|c| node_ui(ui, key, rev, c, depth + 1, out));
     match n {
+        Node::Component { fallback, .. } => node_ui(ui, key, rev, fallback, depth + 1, out),
+        Node::Form { form, values } => form_ui(ui, key, rev, form, values, out),
         Node::Column { children } => {
             ui.vertical(|ui| kids(ui, children, out));
         }
@@ -467,6 +469,69 @@ fn node_ui(ui: &mut Ui, key: &str, rev: u64, n: &Node, depth: usize, out: &mut V
             if let (Some(kind), Some(pos)) = (kind, r.interact_pointer_pos()) {
                 out.push((id.clone(), json!({"kind": kind, "at": [pos.x - o.x, pos.y - o.y]})));
             }
+        }
+    }
+}
+
+/// Form values remain typed; choice labels never become protocol values.
+fn form_ui(ui: &mut Ui, surface: &str, rev: u64, form: &craft_ext_core::form::Form, values: &craft_ext_core::form::Values, out: &mut Vec<(String, Value)>) {
+    use craft_ext_core::form::{ParamKind as K, Value as V, Unit};
+    if form.validate_values(values).is_err() { return; }
+    let mut effective = form.defaults();
+    effective.extend(values.clone());
+    ui.label(egui::RichText::new(&form.title.english).strong());
+    for p in &form.params {
+        if p.visible_when.as_ref().is_some_and(|c| !c.eval(&effective)) { continue; }
+        let enabled = p.enabled_when.as_ref().is_none_or(|c| c.eval(&effective));
+        if matches!(p.kind, K::Section) { ui.separator(); ui.add_enabled(enabled, egui::Label::new(egui::RichText::new(&p.label.english).heading())); continue; }
+        let Some(source) = effective.get(&p.key) else { continue };
+        let id = egui::Id::unique(("plugin-form-edit", surface, &form.key, &p.key));
+        let (mut value, active, old_rev) = ui.ctx().data_mut(|d| d.get_temp::<(V, bool, u64)>(id)).unwrap_or((source.clone(), false, rev));
+        if !active && old_rev != rev { value = source.clone(); }
+        let before = value.clone();
+        let mut editing = false;
+        ui.push_id(id, |ui| ui.add_enabled_ui(enabled, |ui| {
+            ui.horizontal(|ui| {
+                let label = ui.label(&p.label.english);
+                if let Some(help) = &p.help { label.on_hover_text(&help.english); }
+                let response = match (&p.kind, &mut value) {
+                    (K::Range { min, max, step, .. }, V::Number(v)) => {
+                        let mut slider = egui::Slider::new(v, *min..=*max);
+                        if let Some(step) = step { slider = slider.step_by(*step); }
+                        Some(ui.add(slider))
+                    }
+                    (K::Int { min, max, .. }, V::Number(v)) => Some(ui.add(egui::DragValue::new(v).range(*min as f64..=*max as f64).speed(1.0).max_decimals(0))),
+                    (K::Number { min, max, .. }, V::Number(v)) => Some(ui.add(egui::DragValue::new(v).range(min.unwrap_or(f64::NEG_INFINITY)..=max.unwrap_or(f64::INFINITY)))),
+                    (K::Angle { .. }, V::Number(v)) => Some(ui.add(egui::DragValue::new(v).suffix("°"))),
+                    (K::Bool { .. }, V::Bool(v)) => Some(ui.checkbox(v, "")),
+                    (K::Text { multiline, .. }, V::String(v)) => Some(if *multiline { ui.text_edit_multiline(v) } else { ui.text_edit_singleline(v) }),
+                    (K::Choice { options, .. }, V::String(v)) => {
+                        egui::ComboBox::from_id_salt(id).selected_text(options.iter().find(|o| o.id == *v).map(|o| o.label.english.as_str()).unwrap_or("")).show_ui(ui, |ui| {
+                            for o in options { ui.selectable_value(v, o.id.clone(), &o.label.english); }
+                        }); None
+                    }
+                    (K::Radio { options, .. }, V::String(v)) => { for o in options { ui.radio_value(v, o.id.clone(), &o.label.english); } None }
+                    (K::Color { alpha, .. }, V::Color(v)) => {
+                        // Numeric channels preserve HDR and straight working-space values.
+                        for channel in v.iter_mut().take(if *alpha {4} else {3}) {
+                            let r = ui.add(egui::DragValue::new(channel).speed(0.01));
+                            editing |= r.dragged() || r.has_focus();
+                        } None
+                    }
+                    (K::Point { space, .. }, V::Point(v)) => {
+                        for channel in v { let r = ui.add(egui::DragValue::new(channel)); editing |= r.dragged() || r.has_focus(); }
+                        ui.label(match space { craft_ext_core::form::PointSpace::LayerPixels => "px", craft_ext_core::form::PointSpace::ImagePercent => "%" }); None
+                    }
+                    _ => None,
+                };
+                if let Some(r) = response { editing |= r.dragged() || r.has_focus(); if let Some(help) = &p.help { r.on_hover_text(&help.english); } }
+                if let Some(unit) = &p.unit { ui.label(match unit { Unit::Pixels => "px", Unit::Percent => "%", Unit::Degrees => "°", Unit::Seconds => "s", Unit::Frames => "frames", Unit::Custom(s) => s }); }
+            });
+        }));
+        ui.ctx().data_mut(|d| d.insert_temp(id, (value.clone(), editing, rev)));
+        if enabled && value != before {
+            let candidate = [(p.key.clone(), value.clone())].into_iter().collect();
+            if form.validate_values(&candidate).is_ok() { out.push((p.key.clone(), json!(value))); }
         }
     }
 }

@@ -35,7 +35,7 @@ struct Contribution { plugin: ExtensionId, version: Version, name: String, id: S
 struct Surface { view: PluginSurface, owner: Contribution }
 struct Gesture { mark: GroupMark, uid: u64, owner: Contribution, generation: u64 }
 #[derive(Default)]
-struct State { contributions: Vec<Contribution>, workers: BTreeMap<String,mpsc::SyncSender<Job>>, surfaces: BTreeMap<String,Surface>, overlays: BTreeMap<String,Value>, selected_tool: Option<Contribution>, gesture: Option<Gesture>, generation: Option<u64>, seen: Option<(u64,Value,u64)>, prompt: Option<Vec<(PluginRef,Status)>>, failures: BTreeMap<ExtensionId,u32> }
+struct State { form_metadata: BTreeMap<String,Value>, form_flags: BTreeMap<String,Value>, contributions: Vec<Contribution>, workers: BTreeMap<String,mpsc::SyncSender<Job>>, surfaces: BTreeMap<String,Surface>, overlays: BTreeMap<String,Value>, selected_tool: Option<Contribution>, gesture: Option<Gesture>, generation: Option<u64>, seen: Option<(u64,Value,u64)>, prompt: Option<Vec<(PluginRef,Status)>>, failures: BTreeMap<ExtensionId,u32> }
 pub struct Runtime { root: PathBuf, app: AppId, grants: Arc<LiveGrants>, contract: craft_ext_host::api::AppContract, state: Mutex<State>, rx: Mutex<mpsc::Receiver<Request>>, tx: mpsc::SyncSender<Request>, deferred: Mutex<VecDeque<Request>>, interactive: AtomicBool }
 pub fn manager() -> Result<Manager,String> {
     let root=craft_ext_store::location::root_for(craft_ext_store::location::Os::current(),|k|std::env::var(k).ok()).map_err(|e|e.to_string())?;
@@ -207,6 +207,40 @@ impl Runtime {
                 let rt=s.plugins.take(); let out=s.execute(command,&a).map_err(err); s.plugins=rt; out
             }
             "ui.panel.set"|"ui.window.open"=> {
+                let mut a = a;
+                if let Some(object) = a.as_object_mut() {
+                    for field in ["patch_rev", "form_metadata", "form_flags"] { object.remove(field); }
+                }
+                if let Some(raw) = a.get("patch") {
+                    let patch: craft_ext_core::form::Patch = serde_json::from_value(raw.clone()).map_err(err)?;
+                    let id = if op == "ui.window.open" { a["id"].as_str() } else { a["panel"].as_str() }.ok_or_else(||err("surface missing"))?;
+                    let k = format!("{}/{id}", i.plugin);
+                    let st = lock(&self.state);
+                    let sf = st.surfaces.get(&k).ok_or_else(||err("surface missing"))?;
+                    let tree = changes.iter().rev().find(|(o, prior)| o == op && prior.get("panel") == a.get("panel") && prior.get("id") == a.get("id"));
+                    let base_rev = tree.map_or(sf.view.rev, |(_,a)| a["patch_rev"].as_u64().unwrap_or(sf.view.rev.saturating_add(1)));
+                    let raw_tree = tree.map(|(_,a)| a["tree"].clone()).or_else(||sf.view.tree.clone()).ok_or_else(||err("form missing"))?;
+                    let node: Node = serde_json::from_value(raw_tree).map_err(err)?;
+                    let Node::Form { mut form, values } = node else { return Err(err("patch requires root form")); };
+                    let mut state = craft_ext_core::form::FormState { rev: base_rev, values, ..Default::default() };
+                    // Preserve original conditions in staged metadata; show/enable restore them.
+                    let metadata = match tree { Some((_,a)) => a.get("form_metadata").cloned(), None => st.form_metadata.get(&k).cloned() };
+                    if let Some(metadata) = metadata { form = serde_json::from_value(metadata).map_err(err)?; }
+                    let mut flags = match tree { Some((_,a)) => a.get("form_flags").cloned(), None => st.form_flags.get(&k).cloned() }.unwrap_or(json!({}));
+                    state.hidden = serde_json::from_value(flags["hidden"].clone()).unwrap_or_default();
+                    state.disabled = serde_json::from_value(flags["disabled"].clone()).unwrap_or_default();
+                    form.apply_patch(&mut state, &patch).map_err(err)?;
+                    a["form_metadata"] = serde_json::to_value(&form).map_err(err)?;
+                    flags = json!({"hidden":state.hidden,"disabled":state.disabled});
+                    a["form_flags"] = flags;
+                    for p in &mut form.params {
+                        if state.hidden.contains(&p.key) { p.visible_when = Some(craft_ext_core::form::Cond::Any(vec![])); }
+                        if state.disabled.contains(&p.key) { p.enabled_when = Some(craft_ext_core::form::Cond::Any(vec![])); }
+                    }
+                    a["tree"] = serde_json::to_value(Node::Form { form, values: state.values }).map_err(err)?;
+                    a["patch_rev"] = json!(patch.rev);
+                    if op == "ui.window.open" && a.get("title").is_none() { a["title"] = json!(sf.view.title); }
+                }
                 let tree=a.get("tree").ok_or_else(||err("tree missing"))?;
                 let n:Node=serde_json::from_value(tree.clone()).map_err(err)?; n.validate().map_err(|e|err(e.0))?;
                 if op=="ui.panel.set" { let panel=a["panel"].as_str().ok_or_else(||err("panel missing"))?; if !lock(&self.state).surfaces.get(&format!("{}/{panel}",i.plugin)).is_some_and(|sf|!sf.view.window) { return Err(err("undeclared panel")); } }
@@ -227,8 +261,10 @@ impl Runtime {
             if op=="ui.notify" { log::info!("plugin {}: {}",i.plugin,a); continue; }
             let window=op=="ui.window.open"; let id=if window {a["id"].as_str()} else {a["panel"].as_str()}.unwrap_or_default(); let k=format!("{}/{id}",i.plugin);
             if window && !st.surfaces.contains_key(&k) && st.surfaces.values().filter(|s|s.view.window && s.owner.plugin==i.plugin).count()>=4 {continue;}
+            if let Some(metadata) = a.get("form_metadata") { st.form_metadata.insert(k.clone(), metadata.clone()); } else { st.form_metadata.remove(&k); }
+            if let Some(flags) = a.get("form_flags") { st.form_flags.insert(k.clone(), flags.clone()); } else { st.form_flags.remove(&k); }
             let sf=st.surfaces.entry(k.clone()).or_insert_with(||Surface {view:PluginSurface {key:k,title:a["title"].as_str().unwrap_or("Plugin").into(),tree:None,rev:0,window,open:true},owner:owner.clone()});
-            sf.view.tree=Some(a["tree"].clone()); sf.view.rev=sf.view.rev.wrapping_add(1); if window {sf.view.open=true;}
+            sf.view.tree=Some(a["tree"].clone()); sf.view.rev=a["patch_rev"].as_u64().unwrap_or_else(||sf.view.rev.saturating_add(1)); if window {sf.view.open=true;}
         }
     }
 }
@@ -254,7 +290,7 @@ impl PluginRuntime for Runtime {
         let generation=Store::at(&self.root).state().map(|s|s.generation).ok();
         if generation!=lock(&self.state).generation {
             self.tool_event(s,"cancel",[0.,0.],Value::Null);
-            { let mut st=lock(&self.state); st.workers.clear(); st.contributions.clear(); st.surfaces.clear(); st.overlays.clear(); st.selected_tool=None; st.failures.clear(); st.generation=None; }
+            { let mut st=lock(&self.state); st.workers.clear(); st.contributions.clear(); st.surfaces.clear(); st.form_metadata.clear(); st.form_flags.clear(); st.overlays.clear(); st.selected_tool=None; st.failures.clear(); st.generation=None; }
             if generation.is_some() { if let Err(e)=self.load(s) {log::warn!("plugin reconciliation: {e}");} }
         }
         let cancel={let st=lock(&self.state); st.gesture.as_ref().is_some_and(|g|s.ds().map_or(true,|d|d.uid!=g.uid) || self.grants.stopped(&g.owner.plugin,g.owner.version) || self.grants.generation(&g.owner.plugin)!=g.generation)};

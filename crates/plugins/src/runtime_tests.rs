@@ -392,3 +392,32 @@ fn denied_single_operation_does_not_abort_event() {
     assert!(done.is_ok());
     assert!(Arc::ptr_eq(&before, &s.ds().unwrap().doc));
 }
+
+#[test]
+fn form_patches_are_staged_atomic_and_revision_checked() {
+    let f = Fixture::new();
+    let mut s = Session::new();
+    let k = format!("{}/panel", f.owner.plugin);
+    let tree = json!({"type":"form","form":{"schema":1,"key":"settings","title":"Settings","params":[{"key":"amount","label":"Amount","kind":{"type":"range","min":0,"max":10,"default":1}}]},"values":{}});
+    lock(&f.rt.state).surfaces.insert(k.clone(), Surface {
+        view: PluginSurface { key:k.clone(), title:"Test".into(), tree:Some(tree.clone()), rev:1, window:false, open:true }, owner:f.owner.clone()
+    });
+    let inv = f.rt.invocation(&f.owner);
+    let mut staged = Vec::new();
+    let patch = |base, rev, ops| json!({"panel":"panel","patch":{"schema":1,"base_rev":base,"rev":rev,"ops":ops}});
+    assert!(f.rt.op(&mut s, &inv, "ui.panel.set", patch(1,2,json!([{"op":"hide","key":"amount"},{"op":"set","key":"amount","value":11}])), &mut staged).is_err());
+    assert!(staged.is_empty());
+    f.rt.op(&mut s, &inv, "ui.panel.set", patch(1,2,json!([{"op":"hide","key":"amount"}])), &mut staged).unwrap();
+    assert_eq!(lock(&f.rt.state).surfaces[&k].view.tree, Some(tree));
+    f.rt.apply(&inv, staged);
+    let mut staged = Vec::new();
+    assert!(f.rt.op(&mut s, &inv, "ui.panel.set", patch(1,3,json!([])), &mut staged).is_err());
+    f.rt.op(&mut s, &inv, "ui.panel.set", patch(2,3,json!([{"op":"show","key":"amount"},{"op":"set","key":"amount","value":5}])), &mut staged).unwrap();
+    f.rt.apply(&inv, staged);
+    let st = lock(&f.rt.state);
+    let node:Node = serde_json::from_value(st.surfaces[&k].view.tree.clone().unwrap()).unwrap();
+    let Node::Form { form, values } = node else { panic!("expected form") };
+    assert!(form.params[0].visible_when.is_none());
+    assert_eq!(values["amount"], craft_ext_core::form::Value::Number(5.0));
+    assert_eq!(st.surfaces[&k].view.rev, 3);
+}

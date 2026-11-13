@@ -97,3 +97,25 @@ and collaboration/server persistence of references. Scoped native `cargo check` 
 `wasm32-unknown-unknown --features egui/web_file` (covering doc, collab and engine dependencies).
 No workspace tests, application build/run, clippy or commits were performed; craft-extensions was
 read-only. Existing unused-patch, missing optional fonts and wasm fontdb dead-code warnings remain.
+
+## Form schema v1
+
+Panels and windows render `Node::Form` using validated typed values merged with defaults.
+All parameter kinds, sections, units, help, choice IDs, and host-evaluated visibility/enabled
+conditions are supported. Edit state is scoped by surface, form and parameter; events carry
+parameter keys and the surface tree revision. Unknown components render their fallback.
+Color channels are numeric working-space RGBA controls, preserving HDR values.
+
+`ui.panel.set` and `ui.window.open` accept `{panel|id, patch}` instead of `tree` for a root
+form. Patches use the current surface tree revision as `base_rev`; `rev` must increase.
+Validation uses `Form::apply_patch` on private staged state; invalid/stale patches publish
+nothing. Hide/show and disable/enable preserve original conditions. Multiple staged patches
+see preceding staged revisions. Full tree replacement clears patch flags.
+FigCraft has no raster.filter dispatch: contribution effect forms and optional
+craft_describe/craft_update exports remain unused until image-fill effects are integrated.
+
+Form migration validation: scoped native checks passed for figcraft-plugins and
+figcraft-ui-egui; wasm32 UI check passed with egui/web_file. The plugin test suite
+passed all 14 tests, including atomic/stale form patches and hide/show restoration.
+No application run, workspace tests, clippy, or commit was performed; visual behavior
+has not been inspected in a running application.
