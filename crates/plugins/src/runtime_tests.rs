@@ -355,7 +355,7 @@ fn store_generation_change_removes_disabled_contributions_and_workers() {
     let mut s = Session::new();
     {
         let mut st = lock(&f.rt.state);
-        st.generation = Some(f.state.generation);
+        st.generation = Some(f.state.app_fingerprint(&f.rt.app));
         st.selected_tool = Some(f.owner.clone());
         st.surfaces.insert(
             "test/panel".into(),
@@ -377,7 +377,7 @@ fn store_generation_change_removes_disabled_contributions_and_workers() {
     assert!(f.rt.surfaces().is_empty());
     assert!(!f.rt.active_tool());
     assert!(lock(&f.rt.state).workers.is_empty());
-    assert_eq!(lock(&f.rt.state).generation, Some(1));
+    assert_eq!(lock(&f.rt.state).generation, Some(f.state.app_fingerprint(&f.rt.app)));
 }
 
 #[test]
@@ -689,7 +689,7 @@ fn document_changed_follows_content_not_selection_view_or_rollback_and_wakes_the
     f.save();
     let declared: Vec<Permission> = f.owner.declared.iter().cloned().chain([events]).collect();
     lock(&f.rt.state).contributions[0].declared = declared.into();
-    lock(&f.rt.state).generation = Store::at(&f.rt.root).state().map(|s| s.generation).ok();
+    lock(&f.rt.state).generation = Store::at(&f.rt.root).state().map(|s| s.app_fingerprint(&f.rt.app)).ok();
     let woken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let w = woken.clone();
     f.rt.set_waker(Arc::new(move || { w.fetch_add(1, Ordering::Relaxed); }));

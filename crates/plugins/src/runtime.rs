@@ -101,7 +101,8 @@ impl Runtime {
                 st.contributions.push(owner);
             }
         }
-        lock(&self.state).generation=Some(saved.generation);
+        // This app's plugin fingerprint: catalogue refreshes and other apps' changes do not reload.
+        lock(&self.state).generation=Some(saved.app_fingerprint(&self.app));
         let cs=lock(&self.state).contributions.clone();
         for c in cs { if let Err(e)=self.deliver(s,&c,json!({"event":"init"}),true) { log::warn!("plugin {} init: {e}",c.plugin); } }
         Ok(())
@@ -349,7 +350,7 @@ impl PluginRuntime for Runtime {
     fn pump(&self,s:&mut Session) {
         self.interactive.store(true,Ordering::Relaxed);
         if crate::safe_mode() { self.tool_event(s,"cancel",[0.,0.],Value::Null); return;}
-        let generation=Store::at(&self.root).state().map(|s|s.generation).ok();
+        let generation=Store::at(&self.root).state().map(|s|s.app_fingerprint(&self.app)).ok();
         if generation!=lock(&self.state).generation {
             self.tool_event(s,"cancel",[0.,0.],Value::Null);
             { let mut st=lock(&self.state); st.workers.clear(); st.contributions.clear(); st.surfaces.clear(); st.form_metadata.clear(); st.form_flags.clear(); st.overlays.clear(); st.selected_tool=None; st.failures.clear(); st.last_failure.clear(); st.programs.clear(); st.generation=None; }
