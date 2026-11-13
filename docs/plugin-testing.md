@@ -117,7 +117,9 @@ flock $LOCK env CARGO_BUILD_JOBS=4 cargo build -p figcraft
 The app selects the shared renderer through the saved `plugin_ui_engine` preference (default
 `egui`; `framework` currently falls back to egui). Plugins cannot change it.
 
-## Verified run (2026-11-13, Linux x86_64, debug)
+## Historical run record (2026-11-13, Linux x86_64, debug)
+
+This records a prior run only. It does not verify the current source or current example packages.
 
 - `cargo test -p figcraft-plugins --lib -- --include-ignored`: 16 passed, including
   `shapes_example_end_to_end` with the real wasm package; `cargo test -p craft-ext-cli --lib`: 11 passed;

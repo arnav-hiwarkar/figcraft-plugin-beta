@@ -1,7 +1,7 @@
 # Plugin migration status
 
 The shared adapter is active (`crates/plugins`, `figcraft_plugins::activate` from the desktop app's
-startup, after startup files open). Done:
+startup, after startup files open). Current implementation notes and verification limits:
 
 - STARTUP / SAFE-MODE: `activate` attaches one process runtime; `FIGCRAFT_SAFE_MODE=1` attaches it
   without loading or running plugin code (Bridge, Worker and LiveGrants also refuse).
