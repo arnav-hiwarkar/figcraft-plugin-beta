@@ -272,12 +272,18 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
             ds.view.cy += (dh / 2.0 + f64::from(rect.min.y - old_rect.min.y)) / z;
         }
     }
-    // A selected plugin tool takes the canvas pointer (its gesture is one undo step).
-    #[cfg(not(target_arch = "wasm32"))]
-    let plugin_tool = crate::plugins_ui::canvas_input(app, ui, &resp);
-    #[cfg(target_arch = "wasm32")]
-    let plugin_tool = false;
-    let own_cursor = !plugin_tool && input(app, ui, &resp);
+    // A selected plugin tool takes the canvas pointer (its gesture is one undo step), but not the
+    // navigation: zoom, scroll and pan work as with the built-in tools and never reach the plugin.
+    let plugin_tool = app.session.plugins.as_ref().is_some_and(|rt| rt.active_tool());
+    let own_cursor = if plugin_tool {
+        let navigating = input::navigate(app, ui, &resp);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::plugins_ui::canvas_input(app, ui, &resp, navigating);
+        // The pan and zoom cursors show while navigating; otherwise the plugin's cross-hair.
+        navigating || app.canvas.space_pan || app.canvas.zoom_tool.is_some()
+    } else {
+        input(app, ui, &resp)
+    };
     // A browser names no dragged file until the drop, so documents there still say "import", or
     // in Dev Mode show the Dev Mode note, though they open when dropped.
     let documents = ctx.input(|i| i.raw.hovered_files.iter().all(|f| f.path.as_deref().is_some_and(crate::is_document)));

@@ -71,8 +71,9 @@ impl Session {
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         if let Some(rt) = self.plugins.clone() {
             if rt.commands().iter().any(|c| c.id == id) { return rt.run_command(self, id, params); }
-            if rt.busy() { return Err(EngineError::Other("a plugin gesture is in progress".into())); }
+            if rt.busy() && !crate::ext::NAVIGATION_COMMANDS.contains(&id) && !id.starts_with("plugins.") { return Err(EngineError::Other("a plugin gesture is in progress".into())); }
         }
+        if let Some(r) = self.plugin_session_command(id, params) { return r; }
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         crate::cmd::refuse_unknown_params(id, params)?;
         board::refuse_on_board(self, id)?;

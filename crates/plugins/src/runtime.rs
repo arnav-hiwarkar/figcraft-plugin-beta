@@ -35,7 +35,7 @@ struct Contribution { plugin: ExtensionId, version: Version, name: String, id: S
 struct Surface { view: PluginSurface, owner: Contribution }
 struct Gesture { mark: GroupMark, uid: u64, owner: Contribution, generation: u64 }
 #[derive(Default)]
-struct State { form_metadata: BTreeMap<String,Value>, form_flags: BTreeMap<String,Value>, contributions: Vec<Contribution>, workers: BTreeMap<String,mpsc::SyncSender<Job>>, surfaces: BTreeMap<String,Surface>, overlays: BTreeMap<String,Value>, selected_tool: Option<Contribution>, gesture: Option<Gesture>, generation: Option<u64>, seen: Option<(u64,Value,u64)>, prompt: Option<Vec<(PluginRef,Status)>>, failures: BTreeMap<ExtensionId,u32> }
+struct State { form_metadata: BTreeMap<String,Value>, form_flags: BTreeMap<String,Value>, contributions: Vec<Contribution>, workers: BTreeMap<String,mpsc::SyncSender<Job>>, surfaces: BTreeMap<String,Surface>, overlays: BTreeMap<String,Value>, selected_tool: Option<Contribution>, gesture: Option<Gesture>, generation: Option<u64>, seen: Option<(u64,Value,u64)>, prompt: Option<Vec<(PluginRef,Status)>>, failures: BTreeMap<ExtensionId,u32>, last_failure: BTreeMap<ExtensionId,String>, programs: BTreeMap<String,Program> }
 pub struct Runtime { root: PathBuf, app: AppId, grants: Arc<LiveGrants>, contract: craft_ext_host::api::AppContract, state: Mutex<State>, rx: Mutex<mpsc::Receiver<Request>>, tx: mpsc::SyncSender<Request>, deferred: Mutex<VecDeque<Request>>, interactive: AtomicBool }
 pub fn manager() -> Result<Manager,String> {
     let root=craft_ext_store::location::root_for(craft_ext_store::location::Os::current(),|k|std::env::var(k).ok()).map_err(|e|e.to_string())?;
@@ -87,7 +87,7 @@ impl Runtime {
                         let mut bytes=Vec::new(); std::fs::File::open(dir.join(module)).map_err(|e|e.to_string())?.take(craft_ext_host::wasm::MAX_MODULE_BYTES as u64+1).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
                         Program::Wasm(Plugin::load(id.as_str(),&bytes).map_err(|e|e.to_string())?)
                     };
-                    let tx=self.spawn(code)?; lock(&self.state).workers.insert(worker.clone(),tx);
+                    let tx=self.spawn(code.clone())?; let mut st=lock(&self.state); st.workers.insert(worker.clone(),tx); st.programs.insert(worker.clone(),code);
                 }
                 let owner=Contribution { plugin:id.clone(),version,name:manifest.name.clone(),id:c.id.clone(),label:c.label.clone(),kind:c.kind.clone(),declared:c.permissions.iter().chain(&c.optional_permissions).cloned().collect::<Vec<_>>().into(),worker,reference:PluginRef { id:id.clone(),version,sha256:hash.clone(),source,name:manifest.name.clone(),contributions:enabled.iter().cloned().collect(),state_versions:Some(manifest.contributions_for(&self.app).filter(|c|enabled.contains(&c.id)).map(|c|(c.id.clone(),c.state_version)).collect()) } };
                 let mut st=lock(&self.state);
@@ -125,7 +125,7 @@ impl Runtime {
         let uid=s.ds().map_or(0,|d|d.uid); let inv=self.invocation(c);
         let init=event["event"]=="init";
         let completion=Arc::new(Mutex::new(None));
-        if lock(&self.state).failures.get(&c.plugin).copied().unwrap_or(0)>=3 { return Err("plugin paused after three failures".into()); }
+        if lock(&self.state).failures.get(&c.plugin).copied().unwrap_or(0)>=PAUSE_AFTER { return Err("plugin paused after three failures (Plugins ▸ Manage plugins… ▸ Resume)".into()); }
         let surface=event["surface"].as_str().zip(event["rev"].as_u64()).map(|(k,r)|(format!("{}/{k}",c.plugin),r));
         let context=Dispatch { uid,hash:c.reference.sha256.clone(),surface,completion:completion.clone() };
         let (done,rx)=mpsc::channel();
@@ -134,7 +134,7 @@ impl Runtime {
         let deadline=Instant::now()+Duration::from_secs(9);
         loop {
             self.serve(s);
-            match rx.try_recv() { Ok(r)=> { let r=r.and_then(|_|lock(&completion).take().unwrap_or_else(||Err("plugin transaction did not complete".into()))); if r.is_err() && !init { *lock(&self.state).failures.entry(c.plugin.clone()).or_default()+=1; } return r; },Err(mpsc::TryRecvError::Disconnected)=>return Err("worker stopped".into()),_=>{} }
+            match rx.try_recv() { Ok(r)=> { let r=r.and_then(|_|lock(&completion).take().unwrap_or_else(||Err("plugin transaction did not complete".into()))); if let Err(e)=&r { if !init { let mut st=lock(&self.state); *st.failures.entry(c.plugin.clone()).or_default()+=1; st.last_failure.insert(c.plugin.clone(),e.clone()); } } return r; },Err(mpsc::TryRecvError::Disconnected)=>return Err("worker stopped".into()),_=>{} }
             if Instant::now()>deadline { inv.cancel.store(true,Ordering::Relaxed); return Err("plugin event timed out".into()); }
             // A bounded receive avoids spinning while wasm executes between calls.
             let request=lock(&self.rx).recv_timeout(Duration::from_millis(2));
@@ -268,6 +268,8 @@ impl Runtime {
         }
     }
 }
+/// Failed events (not init) before a plugin is paused for the rest of the session.
+pub const PAUSE_AFTER:u32=3;
 fn node_id(a:&Value)->Result<figcraft_doc::NodeId,OpError> { a["id"].as_u64().map(figcraft_doc::NodeId).ok_or_else(||err("id missing")) }
 fn validate_draw(ops:&[craft_ext_core::ui::DrawOp])->Result<(),OpError> {
     if ops.len()>craft_ext_core::ui::MAX_DRAW_OPS || serde_json::to_vec(ops).map_err(err)?.len()>1024*1024 {return Err(err("overlay budget exceeded"));}
@@ -275,6 +277,7 @@ fn validate_draw(ops:&[craft_ext_core::ui::DrawOp])->Result<(),OpError> {
     fn finite(v:&Value)->bool { match v {Value::Number(n)=>n.as_f64().is_some_and(|n|n.is_finite() && n.abs()<=1e8),Value::Array(a)=>a.iter().all(finite),Value::Object(o)=>o.values().all(finite),_=>true} }
     if !finite(&v) {return Err(err("invalid draw coordinates"));} Ok(())
 }
+#[derive(Clone)]
 enum Program { Wasm(Plugin), Native(ExtensionId,Version,PathBuf,PathBuf) }
 impl PluginRuntime for Runtime {
     fn commands(&self)->Vec<PluginCommand> { lock(&self.state).contributions.iter().filter(|c|matches!(c.kind,ContributionKind::Command|ContributionKind::Tool)).map(|c|PluginCommand {id:format!("plugin.{}.{}",c.plugin,c.id),label:c.label.clone(),plugin:c.name.clone(),tool:c.kind==ContributionKind::Tool}).collect() }
@@ -290,7 +293,7 @@ impl PluginRuntime for Runtime {
         let generation=Store::at(&self.root).state().map(|s|s.generation).ok();
         if generation!=lock(&self.state).generation {
             self.tool_event(s,"cancel",[0.,0.],Value::Null);
-            { let mut st=lock(&self.state); st.workers.clear(); st.contributions.clear(); st.surfaces.clear(); st.form_metadata.clear(); st.form_flags.clear(); st.overlays.clear(); st.selected_tool=None; st.failures.clear(); st.generation=None; }
+            { let mut st=lock(&self.state); st.workers.clear(); st.contributions.clear(); st.surfaces.clear(); st.form_metadata.clear(); st.form_flags.clear(); st.overlays.clear(); st.selected_tool=None; st.failures.clear(); st.last_failure.clear(); st.programs.clear(); st.generation=None; }
             if generation.is_some() { if let Err(e)=self.load(s) {log::warn!("plugin reconciliation: {e}");} }
         }
         let cancel={let st=lock(&self.state); st.gesture.as_ref().is_some_and(|g|s.ds().map_or(true,|d|d.uid!=g.uid) || self.grants.stopped(&g.owner.plugin,g.owner.version) || self.grants.generation(&g.owner.plugin)!=g.generation)};
@@ -317,6 +320,31 @@ impl PluginRuntime for Runtime {
     fn selected_tool(&self)->Option<String> {lock(&self.state).selected_tool.as_ref().map(|c|format!("plugin.{}.{}",c.plugin,c.id))}
     fn busy(&self)->bool {lock(&self.state).gesture.is_some()}
     fn overlays(&self)->Vec<Value> {lock(&self.state).overlays.values().cloned().collect()}
+    fn paused(&self)->Vec<figcraft_engine::ext::PausedPlugin> {
+        let st=lock(&self.state);
+        st.failures.iter().filter(|(_,n)|**n>=PAUSE_AFTER).map(|(id,_)| figcraft_engine::ext::PausedPlugin {
+            id:id.to_string(),
+            name:st.contributions.iter().find(|c|c.plugin==*id).map_or_else(||id.to_string(),|c|c.name.clone()),
+            reason:st.last_failure.get(id).cloned().unwrap_or_default(),
+        }).collect()
+    }
+    /// Pauses are per session and never saved. Resume clears the count, replaces each of the
+    /// plugin's workers with a fresh instance (its in-memory state is lost) and sends `init` again.
+    fn resume(&self,s:&mut Session,plugin:&str)->Result<(),String> {
+        let id=ExtensionId::new(plugin).map_err(|e|e.to_string())?;
+        if lock(&self.state).failures.get(&id).copied().unwrap_or(0)<PAUSE_AFTER { return Err(format!("{plugin} is not paused")); }
+        if lock(&self.state).gesture.as_ref().is_some_and(|g|g.owner.plugin==id) { self.tool_event(s,"cancel",[0.,0.],Value::Null); }
+        let owned:Vec<Contribution>=lock(&self.state).contributions.iter().filter(|c|c.plugin==id).cloned().collect();
+        let mut workers:Vec<&str>=owned.iter().map(|c|c.worker.as_str()).collect(); workers.sort_unstable(); workers.dedup();
+        for w in workers {
+            let program=lock(&self.state).programs.get(w).cloned();
+            // A worker without a stored program (none in tests) keeps its instance.
+            if let Some(program)=program { let tx=self.spawn(program)?; lock(&self.state).workers.insert(w.to_string(),tx); }
+        }
+        { let mut st=lock(&self.state); st.failures.remove(&id); st.last_failure.remove(&id); st.overlays.remove(plugin); }
+        for c in owned { if let Err(e)=self.deliver(s,&c,json!({"event":"init"}),true) { log::warn!("plugin {} init after resume: {e}",c.plugin); } }
+        Ok(())
+    }
     fn tool_event(&self,s:&mut Session,phase:&str,at:[f64;2],modifiers:Value) {
         let c=lock(&self.state).selected_tool.clone(); let Some(c)=c else{return};
         if phase=="begin" { if self.busy() {return;} let uid=s.ds().map_or(0,|d|d.uid); lock(&self.state).gesture=Some(Gesture {mark:s.begin_group(),uid,owner:c.clone(),generation:self.grants.generation(&c.plugin)}); }

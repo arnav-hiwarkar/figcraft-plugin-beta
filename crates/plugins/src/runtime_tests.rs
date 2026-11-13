@@ -432,3 +432,138 @@ fn selection_set_maps_to_the_engine_select_command() {
     assert!(done.is_ok());
     assert_eq!(s.selection(), [figcraft_doc::NodeId(id)]);
 }
+
+/// The smallest session module: the ABI exports and a `craft_event` that succeeds without calls.
+const OK_MODULE: &str = r#"(module
+  (memory (export "memory") 32)
+  (global $top (mut i32) (i32.const 1048576))
+  (func (export "craft_abi") (result i32) (i32.const 1))
+  (func (export "craft_reset") (global.set $top (i32.const 1048576)))
+  (func (export "craft_alloc") (param $n i32) (result i32) (local $p i32)
+    (local.set $p (global.get $top))
+    (global.set $top (i32.add (global.get $top) (i32.and (i32.add (local.get $n) (i32.const 7)) (i32.const -8))))
+    (local.get $p))
+  (func (export "craft_event") (param i32 i32) (result i32) (i32.const 0)))"#;
+
+#[test]
+fn paused_plugin_is_listed_and_resume_reinstantiates_it_with_a_clear_count() {
+    let f = Fixture::new();
+    let mut s = Session::new();
+    let (tx, rx) = mpsc::sync_channel::<Job>(4);
+    lock(&f.rt.state).workers.insert(f.owner.worker.clone(), tx);
+    let failing = std::thread::spawn(move || {
+        for job in rx {
+            let _ = job.done.send(Err("trap: unreachable".into()));
+        }
+    });
+    assert!(f.rt.paused().is_empty());
+    assert!(f.rt.resume(&mut s, "test.plugin").is_err(), "not paused yet");
+    for _ in 0..PAUSE_AFTER {
+        assert!(f.rt.deliver(&mut s, &f.owner, json!({"event":"command"}), true).is_err());
+    }
+    let paused = f.rt.paused();
+    assert_eq!(paused.len(), 1);
+    assert_eq!((paused[0].id.as_str(), paused[0].name.as_str(), paused[0].reason.as_str()), ("test.plugin", "Test", "trap: unreachable"));
+    assert!(f.rt.deliver(&mut s, &f.owner, json!({"event":"command"}), true).unwrap_err().contains("paused"));
+    // The stored program is what resume instantiates afresh.
+    let plugin = Plugin::load("test.plugin", &wat::parse_str(OK_MODULE).unwrap()).unwrap();
+    lock(&f.rt.state).programs.insert(f.owner.worker.clone(), Program::Wasm(plugin));
+    f.rt.resume(&mut s, "test.plugin").unwrap();
+    // The failed instance's worker was replaced (its queue closed, so its thread ended).
+    failing.join().unwrap();
+    assert!(f.rt.paused().is_empty());
+    assert!(!lock(&f.rt.state).failures.contains_key(&f.owner.plugin), "the count is cleared");
+    f.rt.deliver(&mut s, &f.owner, json!({"event":"command","id":"command"}), true).unwrap();
+    assert!(f.rt.resume(&mut s, "test.plugin").is_err(), "resuming twice is refused");
+    // Through the session command the UI and scripts use.
+    let mut s2 = Session::new();
+    s2.plugins = Some(f.rt.clone());
+    assert_eq!(s2.execute("plugins.paused", &json!({})).unwrap(), json!([]));
+}
+
+/// A worker that records each event and answers with `calls` (op, args) in one transaction.
+fn recording_worker(f: &Fixture, calls: impl Fn(&Value) -> Vec<(String, Value)> + Send + 'static) -> (Arc<Mutex<Vec<Value>>>, std::thread::JoinHandle<()>) {
+    let (tx, rx) = mpsc::sync_channel::<Job>(8);
+    lock(&f.rt.state).workers.insert(f.owner.worker.clone(), tx);
+    let requests = f.rt.tx.clone();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let handle = std::thread::spawn(move || {
+        for job in rx {
+            lock(&log).push(job.event.clone());
+            let kinds = std::iter::once(Kind::Begin)
+                .chain(calls(&job.event).into_iter().map(|(op, a)| Kind::Call(op, a)))
+                .chain(std::iter::once(Kind::Finish(true)));
+            for kind in kinds {
+                let (reply, rx) = mpsc::channel();
+                requests.send(Request { inv: job.inv.clone(), context: job.context.clone(), kind, reply }).unwrap();
+                let _ = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            }
+            job.done.send(Ok(())).unwrap();
+        }
+    });
+    (seen, handle)
+}
+
+fn canvas_panel(rev_ops: usize) -> Value {
+    json!({"type":"canvas","id":"pad","label":"Pad","width":200.0,"height":100.0,"ops":vec![json!({"op":"rect","min":[0.0,0.0],"max":[10.0,10.0],"fill":[1.0,0.0,0.0,1.0]}); rev_ops]})
+}
+
+#[test]
+fn canvas_widget_pointer_events_reach_the_plugin_and_stale_revisions_are_dropped() {
+    let f = Fixture::new();
+    let mut s = Session::new();
+    let key = format!("{}/panel", f.owner.plugin);
+    lock(&f.rt.state).surfaces.insert(
+        key.clone(),
+        Surface { view: PluginSurface { key: key.clone(), title: "Panel".into(), tree: Some(canvas_panel(1)), rev: 1, window: false, open: true }, owner: f.owner.clone() },
+    );
+    // The guest redraws its panel on every pointer event (a new revision each time).
+    let (seen, worker) = recording_worker(&f, |e| if e["event"] == "ui" { vec![("ui.panel.set".into(), json!({"panel":"panel","tree":canvas_panel(2)}))] } else { vec![] });
+    f.rt.ui_event(&mut s, &key, 1, "pad", json!({"kind":"down","at":[12.5,40.0]}));
+    let rev = f.rt.surfaces()[0].rev;
+    assert_eq!(rev, 2, "the plugin's redraw is a new revision");
+    // An event drawn against revision 1 is stale now and never reaches the plugin.
+    f.rt.ui_event(&mut s, &key, 1, "pad", json!({"kind":"drag","at":[13.0,41.0]}));
+    f.rt.ui_event(&mut s, &key, rev, "pad", json!({"kind":"up","at":[20.0,42.0]}));
+    // A closed panel takes no events either.
+    f.rt.set_open(&key, false);
+    f.rt.ui_event(&mut s, &key, rev, "pad", json!({"kind":"down","at":[0.0,0.0]}));
+    let seen = lock(&seen).clone();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[0], json!({"event":"ui","surface":"panel","rev":1,"widget":"pad","value":{"kind":"down","at":[12.5,40.0]}}));
+    assert_eq!(seen[1]["value"], json!({"kind":"up","at":[20.0,42.0]}));
+    assert_eq!(seen[1]["rev"], 2);
+    lock(&f.rt.state).workers.clear();
+    worker.join().unwrap();
+}
+
+#[test]
+fn canvas_overlay_shows_during_a_gesture_clears_at_its_end_and_refuses_bad_coordinates() {
+    let mut f = Fixture::new();
+    f.owner.kind = ContributionKind::Tool;
+    lock(&f.rt.state).contributions[0].kind = ContributionKind::Tool;
+    let mut s = Session::new();
+    let (seen, worker) = recording_worker(&f, |e| match e["phase"].as_str() {
+        Some("begin" | "update") => {
+            let [x, y] = [e["at"][0].as_f64().unwrap(), e["at"][1].as_f64().unwrap()];
+            vec![("canvas.overlay.set".into(), json!({"ops":[{"op":"line","from":[0.0,0.0],"to":[x,y],"width":1.0,"rgba":[1.0,0.0,1.0,1.0]}]}))]
+        }
+        _ => vec![],
+    });
+    lock(&f.rt.state).selected_tool = Some(f.owner.clone());
+    f.rt.tool_event(&mut s, "begin", [5.0, 6.0], Value::Null);
+    f.rt.tool_event(&mut s, "update", [50.0, 60.0], Value::Null);
+    let overlays = f.rt.overlays();
+    assert_eq!(overlays.len(), 1);
+    assert_eq!(overlays[0][0]["to"], json!([50.0, 60.0]), "the latest draw list replaces the previous one");
+    f.rt.tool_event(&mut s, "commit", [50.0, 60.0], Value::Null);
+    assert!(f.rt.overlays().is_empty(), "cleared at gesture end");
+    assert_eq!(lock(&seen).iter().map(|e| e["phase"].as_str().unwrap_or("").to_string()).collect::<Vec<_>>(), ["begin", "update", "commit"]);
+    // Out-of-range coordinates are refused before anything is staged.
+    let (replies, _) = f.dispatch(&mut s, vec![("canvas.overlay.set", json!({"ops":[{"op":"circle","center":[1e12,0.0],"radius":1.0,"fill":[1.0,1.0,1.0,1.0]}]}))], true);
+    assert!(replies[1].is_err());
+    assert!(f.rt.overlays().is_empty());
+    lock(&f.rt.state).workers.clear();
+    worker.join().unwrap();
+}

@@ -27,6 +27,8 @@ pub mod live;
 pub mod menus;
 pub mod pending_open;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod plugin_dock;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod plugins_ui;
 pub mod popover;
 pub mod present;
@@ -214,6 +216,8 @@ mod paste_image_tests;
 mod pen_mode_tests;
 #[cfg(test)]
 mod perf_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod plugin_host_tests;
 #[cfg(test)]
 mod popover_tests;
 #[cfg(test)]

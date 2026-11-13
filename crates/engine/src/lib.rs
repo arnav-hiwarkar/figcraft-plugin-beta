@@ -112,6 +112,8 @@ pub use view_state::ViewState;
 
 /// The editing session: open documents, the current tool, clipboard and prefs.
 pub mod ext;
+#[cfg(test)]
+mod ext_tests;
 
 pub struct Session {
     pub plugins: Option<Arc<dyn ext::PluginRuntime>>,

@@ -376,6 +376,21 @@ impl FigApp {
                     right::right_panel(self, ui)
                 });
         }
+        // Plugin panels dock beside each sidebar, nearer the canvas, and hide with the sidebars.
+        #[cfg(not(target_arch = "wasm32"))]
+        if !hidden && !minimized && !narrow {
+            for (start, dock) in [(true, crate::plugin_dock::Side::Left), (false, crate::plugin_dock::Side::Right)] {
+                let room = ui.available_width() - crate::CANVAS_MIN;
+                let Some(w) = crate::plugin_dock::width(self, dock, room) else { continue };
+                let (x, grows) = edge(ui, start, w);
+                edges.push((dock.edge_name(), x, w, grows));
+                let id = if start { "plugin_dock_left" } else { "plugin_dock_right" };
+                side(start, id).resizable(false).exact_size(w).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+                    a11y::container(ui, egui::accesskit::Role::Pane, i18n::tr("Plugin panels"));
+                    crate::plugin_dock::show(self, ui, dock)
+                });
+            }
+        }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             let worker = self.worker.take();
             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
@@ -401,6 +416,12 @@ impl FigApp {
         // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
         for (name, x, shown, grows) in edges {
             if let Some(w) = Self::panel_edge(ui, name, x, rows, shown, grows) {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(dock) = crate::plugin_dock::Side::from_edge_name(name) {
+                    crate::plugin_dock::set_width(self, dock, w);
+                    self.panels_unsaved = true;
+                    continue;
+                }
                 let (l, r) = if name == "left" { (w, self.ui.right_width) } else { (self.ui.left_width, w) };
                 self.set_panel_widths(l, r);
                 self.panels_unsaved = true;

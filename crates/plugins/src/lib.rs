@@ -149,6 +149,9 @@ pub fn run_cli(args: &[String], project: Option<&[craft_ext_core::project::Plugi
             }
         };
     }
+    if args.first().is_some_and(|a| a == "resume") {
+        return resume_cli(args.get(1).map(String::as_str), out, err);
+    }
     let m = match manager() {
         Ok(m) => m,
         Err(e) => {
@@ -185,6 +188,22 @@ pub fn run_cli(args: &[String], project: Option<&[craft_ext_core::project::Plugi
     craft_ext_cli::run_plugin(&m, args, out, err)
 }
 
+/// `plugin resume <id>`: a pause lasts for one session and is never saved, so a new
+/// `figcraft-cli` process starts every plugin unpaused. Inside a session (`run --plugins`) the
+/// script step `{"command": "plugins.resume", "params": {"id": …}}` resumes it, as Resume in the
+/// desktop Plugins window does.
+fn resume_cli(id: Option<&str>, out: &mut dyn std::io::Write, err: &mut dyn std::io::Write) -> i32 {
+    let Some(id) = id.filter(|id| craft_ext_core::id::ExtensionId::new(id).is_ok()) else {
+        let _ = writeln!(err, "usage: plugin resume <id>");
+        return 2;
+    };
+    let step = serde_json::json!({"command": "plugins.resume", "params": {"id": id}});
+    let text = format!(
+        "{id} is not paused here: FigCraft pauses a plugin after three failures for the rest of that session only and never saves it, so each figcraft-cli run starts it unpaused.\nTo resume it inside a `run --plugins` script, add the step {step}; in the desktop app use Plugins ▸ Manage plugins… ▸ Resume.\n"
+    );
+    i32::from(write!(out, "{text}").is_err())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -193,5 +212,14 @@ mod tests {
         assert_eq!(super::run_cli(&["contract".into()], None, &mut out, &mut err), 0);
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("FigCraft") && text.contains("node.create"), "{text}");
+    }
+
+    #[test]
+    fn plugin_resume_explains_session_pauses_and_names_the_script_step() {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(super::run_cli(&["resume".into(), "org.example.p".into()], None, &mut out, &mut err), 0);
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("\"plugins.resume\"") && text.contains("org.example.p"), "{text}");
+        assert_eq!(super::run_cli(&["resume".into()], None, &mut Vec::new(), &mut err), 2);
     }
 }

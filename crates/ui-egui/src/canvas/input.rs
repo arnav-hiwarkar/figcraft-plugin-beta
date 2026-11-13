@@ -189,6 +189,60 @@ fn pan_view(app: &mut FigApp, ctx: &egui::Context, pos: Pos2, mods: &egui::Modif
     }
 }
 
+/// Zoom about the pointer by `zoom_delta` (pinch, Cmd/Ctrl+scroll; a plain mouse wheel with Scroll
+/// wheel zoom), or else scroll the view by `scroll`.
+fn zoom_or_scroll(app: &mut FigApp, pos: Pos2, zoom_delta: f32, scroll: egui::Vec2, shift: bool) {
+    if (zoom_delta - 1.0).abs() > 1e-4 {
+        let anchor = app.to_page(pos);
+        if let Ok(ds) = app.session.ds_mut() {
+            let z = ds.view.zoom * f64::from(zoom_delta);
+            ds.view.set_zoom_at(z, (anchor.x, anchor.y));
+            ds.revision += 1;
+        }
+    } else if scroll != egui::Vec2::ZERO
+        && let Ok(ds) = app.session.ds_mut()
+    {
+        ds.view.scroll(f64::from(scroll.x), f64::from(scroll.y), shift);
+        ds.revision += 1;
+    }
+}
+
+/// A middle-button (or side-button) or Space pan under way or starting: true while it has the pointer.
+fn pan_gesture(app: &mut FigApp, ctx: &egui::Context, resp: &egui::Response, pos: Pos2, mods: &egui::Modifiers) -> bool {
+    let middle_down = ctx.input(pan_button_down);
+    if (middle_down || (app.canvas.space_pan && ctx.input(|i| i.pointer.primary_down()))) && resp.hovered() || app.canvas.middle_pan.is_some() {
+        pan_view(app, ctx, pos, mods, middle_down);
+        return true;
+    }
+    false
+}
+
+/// The canvas navigation alone, for a selected plugin tool: wheel and pinch zoom or scroll, the zoom
+/// tool (Z held), and middle/side-button or Space panning, the same code and order as [`input`] uses
+/// for the built-in tools. True while navigation has the pointer: the plugin gets none of it.
+pub(super) fn navigate(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> bool {
+    let ctx = ui.ctx().clone();
+    let (mods, pan_delta, zoom_delta, hover_pos, space) = ctx.input(|i| {
+        let pan = i.multi_touch().map_or(egui::Vec2::ZERO, |m| m.translation_delta);
+        (i.modifiers, pan, i.zoom_delta(), i.pointer.hover_pos(), i.key_down(egui::Key::Space))
+    });
+    let (wheel, zoom_delta) = wheel_zoom(app, &ctx, zoom_delta, mods.shift);
+    let editing_text = app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false);
+    let typing_elsewhere = crate::a11y::field_focused(&ctx);
+    app.canvas.space_pan = space && !editing_text && !typing_elsewhere;
+    let Some(pos) = hover_pos.filter(|p| app.canvas.rect.contains(*p)) else {
+        // A pan whose button was released off the canvas is over.
+        if !ctx.input(|i| pan_button_down(i) || i.pointer.primary_down()) {
+            app.canvas.middle_pan = None;
+        }
+        return app.canvas.middle_pan.is_some();
+    };
+    if resp.hovered() {
+        zoom_or_scroll(app, pos, zoom_delta, wheel + pan_delta, mods.shift);
+    }
+    zoom_tool(app, ui, resp, pos, mods, editing_text || typing_elsewhere) || pan_gesture(app, &ctx, resp, pos, &mods)
+}
+
 /// The pointer and keys on the canvas. False when something on it with a cursor of its own has
 /// the pointer (a comment pin, a ruler guide, a gradient or padding handle): the tool's cursor
 /// then doesn't show.
@@ -248,27 +302,13 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     // Zoom (pinch, Cmd/Ctrl+scroll; a plain mouse wheel with Scroll wheel zoom) about the pointer;
     // other scrolls pan.
     if resp.hovered() {
-        if (zoom_delta - 1.0).abs() > 1e-4 {
-            let anchor = app.to_page(pos);
-            if let Ok(ds) = app.session.ds_mut() {
-                let z = ds.view.zoom * f64::from(zoom_delta);
-                ds.view.set_zoom_at(z, (anchor.x, anchor.y));
-                ds.revision += 1;
-            }
-        } else if scroll != egui::Vec2::ZERO
-            && let Ok(ds) = app.session.ds_mut()
-        {
-            ds.view.scroll(f64::from(scroll.x), f64::from(scroll.y), mods.shift);
-            ds.revision += 1;
-        }
+        zoom_or_scroll(app, pos, zoom_delta, scroll, mods.shift);
     }
     if zoom_tool(app, ui, resp, pos, mods, editing_text || typing_elsewhere) {
         return true;
     }
     // Middle-button (or side-button) / space panning.
-    let middle_down = ctx.input(pan_button_down);
-    if (middle_down || (app.canvas.space_pan && ctx.input(|i| i.pointer.primary_down()))) && resp.hovered() || app.canvas.middle_pan.is_some() {
-        pan_view(app, &ctx, pos, &mods, middle_down);
+    if pan_gesture(app, &ctx, resp, pos, &mods) {
         return true;
     }
     // A handle drag whose button went up ends first, wherever on the canvas the pointer is: over a

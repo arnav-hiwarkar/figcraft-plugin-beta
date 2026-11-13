@@ -18,12 +18,13 @@ startup, after startup files open). Done:
 - COMMANDS: `plugin.<id>.<contribution>` through `Session::execute`; menu Plugins ▸ <plugin> ▸
   <label> (and the Actions/automation paths that use `execute`).
 - PANEL-UI: panels and `ui.window.open` windows drawn by `ui-egui/src/plugins_ui.rs` (per-widget
-  slider/text edit state, tree revisions; stale revisions dropped); panel toggles in the Plugins menu.
-  UI ops are staged and applied only on commit.
-- TOOL-GESTURES: toolbar strip above the main pill; press/move/release → begin/update/commit as one
-  transaction; Escape (consumed before shortcuts) → cancel + rollback; document switch, revocation
-  or grant change cancels. `canvas.overlay.set` draw lists (page units, bounded/finite-checked) draw
-  on the canvas and clear at gesture end.
+  slider/text edit state, tree revisions; stale revisions dropped). Panels dock (PLUGIN-PANEL-DOCK,
+  below); windows stay floating. UI ops are staged and applied only on commit.
+- TOOL-GESTURES: toolbar strip above the main pill; primary press/move/release → begin (at the press
+  point)/update/commit as one transaction; Escape (consumed before shortcuts) → cancel + rollback;
+  document switch, revocation or grant change cancels. `canvas.overlay.set` draw lists (page units,
+  bounded/finite-checked) draw on the canvas and clear at gesture end. Navigation is the canvas's own
+  (PLUGIN-CANVAS-NAV, below).
 - NATIVE: `native::Helper::start` with grants/log; `supervise()` every worker tick (100 ms).
 - MANAGEMENT: Plugins window (`ManagerView`) from Plugins ▸ Manage plugins… and Preferences;
   catalogue/kill-list refresh at startup and every 6 h in the background (`refresh_in_background`,
@@ -32,13 +33,42 @@ startup, after startup files open). Done:
 - PROJECTS: `Document.plugins` (serde default, skipped when empty); a committed event records its
   plugin's PluginRef; `check_project` on document open → desktop ProjectPrompt.
 
+- PLUGIN-PANEL-DOCK (done): plugin panels dock in the main window beside the sidebars
+  (`ui-egui/src/plugin_dock.rs`, hosted from `app.rs`): one dock per side, between the built-in panel
+  and the canvas, with a tab per shown panel (click shows it, × or middle-click hides it, right-click
+  moves it to the other sidebar or hides it). Each dock resizes from its canvas edge like the built-in
+  panels (double-click: default width), keeps the canvas its minimum width, and hides with the
+  sidebars (Hide UI, minimized, narrow window). Plugins ▸ <panel title> shows or hides a panel. The
+  layout (side, tab order, shown, active tab per side, widths) is the `plugin_panels` preference and
+  decides each panel's open flag in the runtime; it keeps entries for panels whose plugin is disabled
+  or removed (at most 256), so a re-enabled panel comes back on its side, in its place, shown if it was.
+- PLUGIN-CANVAS-NAV (done): with a plugin tool selected the canvas runs its own navigation first
+  (`canvas/input.rs` `navigate`: the same wheel/pinch zoom and scroll, Z zoom tool, middle/side-button
+  and Space pans as the built-in tools); a press that navigation takes stays navigation until every
+  button is up and never reaches the plugin; middle and side buttons never start a gesture. Gesture
+  coordinates are page units from the view of the frame they are sent in, so a zoom or pan mid-gesture
+  sends an `update` with the pointer's new page point; a release during a pan commits at the last point
+  the plugin saw. Viewport commands (`ext::NAVIGATION_COMMANDS`: zoom in/out/100/50/200/fit/selection,
+  zoomAt, pan, view.set/get) run while a gesture is open (edits are still refused), and a rolled-back
+  gesture keeps the view it ended with (`Session::finish_group`).
+- PLUGIN-FAILURE-RESET (done): the runtime records each plugin's last failure; `PluginRuntime::paused`
+  lists plugins paused after `PAUSE_AFTER` (3) failures and `resume` clears the count, replaces each of
+  the plugin's workers with a fresh instance of its stored program (in-memory state is lost) and sends
+  `init` again. Session commands `plugins.paused` and `plugins.resume {id}` reach it from the UI,
+  scripts (`figcraft-cli run --plugins`), automation and MCP. The Plugins window shows "Problems this
+  session" (name, id, last error, **Resume**) above the shared manager. Pauses are per session and
+  never saved; `figcraft-cli plugin resume <id>` says so and prints the script step. A store change
+  (enable, disable, grant, update) also starts plugins unpaused, as before.
+- CANVAS PATHS (verified): canvas-widget pointer events reach the guest as `ui` events with the
+  widget id, `{kind: down|drag|up, at: [x, y]}` in the widget's own units and the tree revision they
+  were drawn from; an event for an older revision or a closed panel is dropped. Fixed: a click sent only
+  `up` and a drag began with `down` at the drag-start point (after egui's drag threshold) and a `drag`
+  every frame; now a press sends `down` at the press point, moves send `drag`, release sends `up`.
+  `canvas.overlay.set` lists replace the plugin's previous list, draw over the canvas mapped through
+  the current view, clear at gesture end and are refused when out of range.
+
 Remaining (named TODOs):
 
-- TODO(PLUGIN-CANVAS-NAV): while a plugin tool is selected the canvas skips its own input, so wheel
-  zoom/pan need another tool; route navigation through.
-- TODO(PLUGIN-PANEL-DOCK): panels are floating egui windows stacked at the canvas edge, not docked
-  into the right sidebar.
-- TODO(PLUGIN-FAILURE-RESET): the three-failure pause is per process; expose resume in the manager.
 - RESOURCES: register fonts only for this app, activate craft-theme when available; investigate
   image-fill effect dispatch before advertising raster.filter.
 - SCOPE: replace conservative document grants for selected-target get/update/delete with
@@ -131,3 +161,19 @@ named a command that does not exist); `plugin project` prints the shared status 
 instead of Rust debug text; the contract carries real summaries, arguments and results and the shared
 page is regenerated from it. `figcraft-cli run --plugins` runs plugin commands headlessly.
 Panels start closed; they open from their title in the Plugins menu.
+
+## Dock, navigation and resume (PLUGIN-PANEL-DOCK, PLUGIN-CANVAS-NAV, PLUGIN-FAILURE-RESET)
+
+Tests: `figcraft-plugins` (resume with a real wasm instance from `wat`, paused listing, CLI resume
+text, canvas-widget events and stale revisions, overlay set/replace/clear/refuse), `figcraft-engine`
+`ext_tests` (viewport commands mid-gesture, edits refused, view kept on rollback, session commands),
+`figcraft-ui-egui` `plugin_host_tests` (window harness with a recording runtime: wheel zoom and
+scroll, middle and Space drags, zoom shortcut never reach the plugin; gesture begins at the press
+point and follows a zoom or pan mid-gesture; docking, disable/re-enable restore, menu toggle; layout
+rules; canvas widget down/drag/up). Not verified in a running GUI (no display here): the dock's look,
+the tab context menu and the Resume button.
+
+Shared follow-up (craft-extensions, not changed here): `ManagerView` has no hook for host problems
+with actions. FigCraft draws its paused list above the shared view; `set_problems` would be
+overwritten by the next update check and has no Resume. A `ManagerView::set_session_problems(Vec<(id,
+reason)>) -> resumed ids` (or a callback) would let the Problems tab own it in every app.

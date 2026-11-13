@@ -90,19 +90,28 @@ flock $LOCK env CARGO_BUILD_JOBS=4 cargo build -p figcraft
    Browse search “shapes”, **Install 1.0.0**, then in **Set up Shapes** enable the three
    contributions and allow “Change the current document” (and optionally app events). Skip this if
    you used the CLI setup above.
-2. New design file. **Plugins ▸ Shapes** (the panel toggle at the top of the menu) opens the floating
-   Shapes panel. Change Shape, Size, Count and Colour, click **Create shapes**: a row of layers appears.
+2. New design file. **Plugins ▸ Shapes** (the panel toggle at the top of the menu) docks the Shapes
+   panel beside the right sidebar as a tab. Drag its canvas-side edge to resize it; right-click the tab
+   ▸ **Move to left sidebar**; quit and restart: it is still there, at that width. Click × to hide it. Change Shape, Size, Count and Colour, click **Create shapes**: a row of layers appears.
    **Edit ▸ Undo** once removes the whole row; Redo brings it back. With app events allowed, the panel
    shows “Last app event: selection.changed” when you click a layer.
 3. **Plugins ▸ Shapes ▸ Create shapes** runs the same command from the menu (also in the Actions palette).
 4. The plugin tool strip above the toolbar shows **D** (Draw rectangle). Click it, press-drag on the
    canvas: a live rectangle, a pink outline, cross-hair guides and a size label follow the pointer.
    Release to keep it (one undo step). Drag again and press **Escape** before releasing: the rectangle
-   and guide disappear and History is unchanged. Zoom/pan need another tool (PLUGIN-CANVAS-NAV).
+   and guide disappear and History is unchanged. With the tool still selected: the wheel, a pinch,
+   Cmd/Ctrl+wheel, middle-drag, Space-drag, Z-click and Shift+0/Shift+1/Cmd+= zoom and pan as with
+   the Move tool and draw nothing; zoom with the wheel or Cmd+= in the middle of a drag: the rectangle
+   follows the pointer's new page position.
 5. With the panel open, in the Plugins window **Installed ▸ Shapes** revoke “Change the current
    document”: the Shapes panel, menu items and tool disappear on the next frame; a gesture in progress
    is cancelled with a “revoked” toast. Allow it again: they come back.
-6. **File ▸ Save as…** a `.figcraft`, close it, remove Shapes in the Plugins window, reopen the file:
+6. Disable Shapes in the Plugins window: its docked panel disappears and the canvas widens. Enable it
+   again: the panel comes back on the same side. (Pausing needs a plugin that fails three times; the
+   Plugins window then lists it under "Problems this session" with **Resume**. Headless:
+   `figcraft-cli plugin resume <id>` explains that pauses last one session, and a `run --plugins` script
+   can contain `{"command":"plugins.resume","params":{"id":"<id>"}}`.)
+7. **File ▸ Save as…** a `.figcraft`, close it, remove Shapes in the Plugins window, reopen the file:
    the project prompt lists Shapes as missing; **Open without them** opens the file with every layer intact.
 
 The renderer stays egui: `figcraft_ui_egui::plugins_ui::render_surface` is the single function to

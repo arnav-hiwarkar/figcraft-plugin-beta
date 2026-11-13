@@ -33,6 +33,10 @@ struct State {
     /// The last pointer position sent during a tool gesture (page units), so a still pointer
     /// sends no updates.
     last_at: Option<[f64; 2]>,
+    /// The press under way began as canvas navigation (Space or middle drag, the zoom tool).
+    nav_press: bool,
+    /// Plugins whose Resume was clicked in the Plugins window this frame.
+    resume: Vec<String>,
 }
 
 thread_local! {
@@ -60,6 +64,8 @@ pub fn frame(app: &mut FigApp, ctx: &egui::Context) {
     // Keep observing shared-store changes even when no contribution is currently enabled.
     ctx.request_repaint_after(Duration::from_secs(1));
     app.session.pump_plugins();
+    // Docked panels: new ones get a place, and each panel's open flag follows the saved layout.
+    crate::plugin_dock::sync(app);
     if let Some(m) = app.session.message.take() {
         app.toast(m);
     }
@@ -87,8 +93,10 @@ pub fn frame(app: &mut FigApp, ctx: &egui::Context) {
     }
 }
 
-/// The project prompt, the Plugins window, and plugin panels and windows.
+/// The project prompt, the Plugins window (with the plugins paused this session and their Resume
+/// action), and plugin windows (`ui.window.open`; panels dock in [`crate::plugin_dock`]).
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
+    let paused = app.session.plugins.as_ref().map(|rt| rt.paused()).unwrap_or_default();
     STATE.with(|st| {
         let mut st = st.borrow_mut();
         if st.prompt.is_some()
@@ -104,6 +112,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                 if figcraft_plugins::safe_mode() {
                     ui.label(tr("Safe mode: no plugin code runs this session. Changes apply after a restart without FIGCRAFT_SAFE_MODE=1."));
                 }
+                paused_problems(ui, &paused, &mut st.resume);
                 match manager(&mut st) {
                     Some(m) => st.view.get_or_insert_with(ManagerView::new).show(ui, &m),
                     None => {
@@ -114,17 +123,19 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             st.manager_open = open;
         }
     });
+    for id in STATE.with(|st| std::mem::take(&mut st.borrow_mut().resume)) {
+        app.run("plugins.resume", json!({"id": id}));
+    }
     let Some(rt) = app.session.plugins.clone() else { return };
     let mut events: Vec<(String, u64, String, Value)> = Vec::new();
     let mut closed: Vec<String> = Vec::new();
-    let right = app.canvas.rect.right_top() + vec2(-300.0, 48.0);
-    for (i, sf) in rt.surfaces().into_iter().filter(|s| s.open).enumerate() {
+    for sf in rt.surfaces().into_iter().filter(|s| s.open && s.window) {
         let mut open = true;
-        let mut window = egui::Window::new(&sf.title).id(egui::Id::unique(("figcraft-plugin-surface", &sf.key))).open(&mut open).resizable(true).default_width(280.0);
-        // Panels stack along the canvas's right edge until moved; windows open where egui puts them.
-        if !sf.window {
-            window = window.default_pos(right + vec2(0.0, 40.0 * i as f32));
-        }
+        let window = egui::Window::new(&sf.title)
+            .id(egui::Id::unique(("figcraft-plugin-surface", &sf.key)))
+            .open(&mut open)
+            .resizable(true)
+            .default_width(280.0);
         window.show(ctx, |ui| match sf.tree.as_ref().and_then(|t| serde_json::from_value::<Node>(t.clone()).ok()) {
             Some(node) => {
                 let out = render_surface(ui, &sf.key, sf.rev, &node);
@@ -165,7 +176,7 @@ pub fn menu(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> bool {
     }
     for p in &panels {
         if item(ui, &p.title, "", true, p.open, t) {
-            rt.set_open(&p.key, !p.open);
+            crate::plugin_dock::toggle(app, &p.key);
             return true;
         }
     }
@@ -192,6 +203,28 @@ pub fn menu(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> bool {
         return true;
     }
     false
+}
+
+/// The Plugins window's problems from this session: each plugin paused after three failures, its
+/// last error, and Resume (clears the count and starts the plugin afresh; pauses are never saved).
+fn paused_problems(ui: &mut Ui, paused: &[figcraft_engine::ext::PausedPlugin], resume: &mut Vec<String>) {
+    if paused.is_empty() {
+        return;
+    }
+    ui.group(|ui| {
+        ui.label(egui::RichText::new(tr("Problems this session")).strong());
+        for p in paused {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("{} ({}): {}", p.name, p.id, tr("paused after three failures")));
+                if ui.button(tr("Resume")).clicked() {
+                    resume.push(p.id.clone());
+                }
+            });
+            if !p.reason.is_empty() {
+                ui.label(egui::RichText::new(p.reason.chars().take(300).collect::<String>()).small());
+            }
+        }
+    });
 }
 
 /// Preferences ▸ Plugins: opens the Plugins window.
@@ -247,42 +280,61 @@ pub fn tool_strip(app: &mut FigApp, ui: &mut Ui, pill: Rect, t: &Tokens) {
     }
 }
 
-/// Canvas pointer input while a plugin tool is selected: press → `begin`, moves → `update`,
-/// release → `commit` (the whole gesture is one undo step). Returns true when the plugin tool took
-/// the canvas input this frame.
-pub fn canvas_input(app: &mut FigApp, ui: &Ui, resp: &egui::Response) -> bool {
-    let Some(rt) = app.session.plugins.clone() else { return false };
+/// Canvas pointer input while a plugin tool is selected: primary press → `begin` (at the press
+/// point), moves → `update`, release → `commit` (the whole gesture is one undo step). `navigating`:
+/// the canvas navigation ([`crate::canvas`]) has the pointer this frame (Space or middle drag, the
+/// zoom tool); a press it took stays navigation until every button is up and never reaches the
+/// plugin. Coordinates are page units from the view as it is this frame, so a zoom or pan mid-gesture
+/// sends an `update` with the pointer's new page point.
+pub fn canvas_input(app: &mut FigApp, ui: &Ui, resp: &egui::Response, navigating: bool) {
+    let Some(rt) = app.session.plugins.clone() else { return };
     if !rt.active_tool() {
-        return false;
+        return;
     }
     let ctx = ui.ctx();
-    let m = ctx.input(|i| i.modifiers);
+    let (m, primary_down, any_down, hover, origin) =
+        ctx.input(|i| (i.modifiers, i.pointer.primary_down(), i.pointer.any_down(), i.pointer.hover_pos(), i.pointer.press_origin()));
     let modifiers = json!({"shift": m.shift, "alt": m.alt, "cmd": m.command, "ctrl": m.ctrl});
     let page = |app: &FigApp, p: egui::Pos2| {
         let q = app.to_page(p);
         [q.x, q.y]
     };
-    let Some(pos) = resp.interact_pointer_pos().or_else(|| ctx.input(|i| i.pointer.hover_pos())) else { return true };
-    let at = page(app, pos);
-    if resp.drag_started() || (resp.clicked() && !rt.busy()) {
-        STATE.with(|st| st.borrow_mut().last_at = Some(at));
-        rt.tool_event(&mut app.session, "begin", at, modifiers.clone());
-    }
-    if resp.dragged() && rt.busy() && STATE.with(|st| st.borrow().last_at) != Some(at) {
-        STATE.with(|st| st.borrow_mut().last_at = Some(at));
-        rt.tool_event(&mut app.session, "update", at, modifiers.clone());
-    }
-    if (resp.drag_stopped() || resp.clicked()) && rt.busy() {
-        STATE.with(|st| st.borrow_mut().last_at = None);
-        rt.tool_event(&mut app.session, "commit", at, modifiers);
+    let skip = STATE.with(|st| {
+        let mut st = st.borrow_mut();
+        let skip = navigating || st.nav_press;
+        st.nav_press = (st.nav_press || navigating) && any_down;
+        skip
+    });
+    if skip {
+        // A gesture whose button went up while navigating ends where the plugin last saw it.
+        if rt.busy() && !primary_down {
+            let at = STATE.with(|st| st.borrow_mut().last_at.take()).unwrap_or_default();
+            rt.tool_event(&mut app.session, "commit", at, modifiers);
+        }
+    } else if let Some(pos) = resp.interact_pointer_pos().or(hover) {
+        let at = page(app, pos);
+        let started = resp.drag_started_by(egui::PointerButton::Primary) || (resp.clicked() && !rt.busy());
+        if started && !rt.busy() {
+            let from = if resp.clicked() { at } else { origin.map_or(at, |o| page(app, o)) };
+            STATE.with(|st| st.borrow_mut().last_at = Some(from));
+            rt.tool_event(&mut app.session, "begin", from, modifiers.clone());
+        }
+        if rt.busy() && STATE.with(|st| st.borrow().last_at) != Some(at) {
+            STATE.with(|st| st.borrow_mut().last_at = Some(at));
+            rt.tool_event(&mut app.session, "update", at, modifiers.clone());
+        }
+        if rt.busy() && !primary_down {
+            STATE.with(|st| st.borrow_mut().last_at = None);
+            rt.tool_event(&mut app.session, "commit", at, modifiers);
+        }
     }
     if let Some(msg) = app.session.message.take() {
         app.toast(msg);
     }
-    if resp.hovered() {
+    // The canvas draws the pan or zoom cursor over this while Space or Z is held.
+    if resp.hovered() && !skip {
         ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
     }
-    true
 }
 
 fn rgba(c: [f32; 4]) -> Color32 {
@@ -465,12 +517,14 @@ fn node_ui(ui: &mut Ui, key: &str, rev: u64, n: &Node, depth: usize, out: &mut V
                     }
                 }
             }
-            let kind = if r.drag_started() {
+            // Press → down (at the press point), moves → drag, release → up; a click is down + up.
+            let (pressed, moved) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.delta() != egui::Vec2::ZERO));
+            let kind = if r.is_pointer_button_down_on() && pressed {
                 Some("down")
-            } else if r.dragged() {
-                Some("drag")
             } else if r.drag_stopped() || r.clicked() {
                 Some("up")
+            } else if r.dragged() && moved {
+                Some("drag")
             } else {
                 None
             };
