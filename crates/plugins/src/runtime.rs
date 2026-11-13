@@ -1,6 +1,6 @@
 //! Workers own guest instances; only pump executes document operations.
 use std::{collections::{BTreeMap, VecDeque}, sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}, path::PathBuf};
-use craft_ext_core::{id::{AppId, ExtensionId}, version::Version, manifest::ContributionKind, permission::Permission, project::{PluginRef, Source, Status}, ui::Node};
+use craft_ext_core::{id::{AppId, ExtensionId}, version::Version, manifest::ContributionKind, permission::Permission, project::{PluginRef, Source, Status}, ui::tree::Node};
 use craft_ext_host::{api::{AppApi, Grants, Invocation, OpError, Code, authorize}, wasm::{Plugin, Session as Guest}};
 use craft_ext_store::{Manager, Store, view::GrantView};
 use figcraft_engine::{Session, EngineError, ext::{PluginRuntime, PluginCommand, PluginSurface, GroupMark}};
@@ -10,7 +10,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(PoisonEr
 fn err(e: impl ToString) -> OpError { OpError::invalid(e.to_string()) }
 fn key(i: &Invocation) -> usize { Arc::as_ptr(&i.cancel) as usize }
 #[derive(Clone)]
-struct Dispatch { uid: u64, hash: Option<String>, surface: Option<(String,u64)>, completion: Arc<Mutex<Option<Result<(),String>>>> }
+struct Dispatch { read_only: bool, uid: u64, hash: Option<String>, surface: Option<(String,u64)>, completion: Arc<Mutex<Option<Result<(),String>>>> }
 enum Kind { Begin, Call(String,Value), Finish(bool) }
 struct Request { inv: Invocation, context: Dispatch, kind: Kind, reply: mpsc::Sender<Result<Value,OpError>> }
 struct Bridge { contract: craft_ext_host::api::AppContract, tx: mpsc::SyncSender<Request>, context: Arc<Mutex<Option<Dispatch>>> }
@@ -35,7 +35,7 @@ struct Contribution { plugin: ExtensionId, version: Version, name: String, id: S
 struct Surface { view: PluginSurface, owner: Contribution }
 struct Gesture { mark: GroupMark, uid: u64, owner: Contribution, generation: u64 }
 #[derive(Default)]
-struct State { form_metadata: BTreeMap<String,Value>, form_flags: BTreeMap<String,Value>, contributions: Vec<Contribution>, workers: BTreeMap<String,mpsc::SyncSender<Job>>, surfaces: BTreeMap<String,Surface>, overlays: BTreeMap<String,Value>, selected_tool: Option<Contribution>, gesture: Option<Gesture>, generation: Option<u64>, seen: Option<(u64,Value,u64)>, prompt: Option<Vec<(PluginRef,Status)>>, failures: BTreeMap<ExtensionId,u32>, last_failure: BTreeMap<ExtensionId,String>, programs: BTreeMap<String,Program> }
+struct State { form_metadata: BTreeMap<String,Value>, form_flags: BTreeMap<String,Value>, contributions: Vec<Contribution>, workers: BTreeMap<String,mpsc::SyncSender<Job>>, surfaces: BTreeMap<String,Surface>, overlays: BTreeMap<String,Value>, selected_tool: Option<Contribution>, gesture: Option<Gesture>, generation: Option<u64>, seen: Option<(u64,Value,u64,u64)>, prompt: Option<Vec<(PluginRef,Status)>>, failures: BTreeMap<ExtensionId,u32>, last_failure: BTreeMap<ExtensionId,String>, programs: BTreeMap<String,Program> }
 pub struct Runtime { root: PathBuf, app: AppId, grants: Arc<LiveGrants>, contract: craft_ext_host::api::AppContract, state: Mutex<State>, rx: Mutex<mpsc::Receiver<Request>>, tx: mpsc::SyncSender<Request>, deferred: Mutex<VecDeque<Request>>, interactive: AtomicBool }
 pub fn manager() -> Result<Manager,String> {
     let root=craft_ext_store::location::root_for(craft_ext_store::location::Os::current(),|k|std::env::var(k).ok()).map_err(|e|e.to_string())?;
@@ -127,7 +127,7 @@ impl Runtime {
         let completion=Arc::new(Mutex::new(None));
         if lock(&self.state).failures.get(&c.plugin).copied().unwrap_or(0)>=PAUSE_AFTER { return Err("plugin paused after three failures (Plugins ▸ Manage plugins… ▸ Resume)".into()); }
         let surface=event["surface"].as_str().zip(event["rev"].as_u64()).map(|(k,r)|(format!("{}/{k}",c.plugin),r));
-        let context=Dispatch { uid,hash:c.reference.sha256.clone(),surface,completion:completion.clone() };
+        let context=Dispatch { read_only: event["event"] == "app" && event["name"] == "document.changed", uid,hash:c.reference.sha256.clone(),surface,completion:completion.clone() };
         let (done,rx)=mpsc::channel();
         lock(&self.state).workers.get(&c.worker).ok_or("worker stopped")?.try_send(Job { inv:inv.clone(),context,event,done }).map_err(|_|"worker queue full")?;
         if !wait { return Ok(()); }
@@ -169,7 +169,7 @@ impl Runtime {
                 Kind::Call(ref op,ref args)=> {
                     let valid=self.validate(s,&begin);
                     failed|=valid.is_err();
-                    let out=valid.and_then(|_|authorize(&self.contract,self.grants.as_ref(),&begin.inv,op,args)).and_then(|_|self.op(s,&begin.inv,op,args.clone(),&mut changes));
+                    let out=valid.and_then(|_| { if begin.context.read_only && self.contract.op(op).is_some_and(|s| s.kind == craft_ext_host::api::OpKind::Edit) { Err(OpError::denied("document.changed cannot edit the document; use a command or UI action")) } else { Ok(()) } }).and_then(|_|authorize(&self.contract,self.grants.as_ref(),&begin.inv,op,args)).and_then(|_|self.op(s,&begin.inv,op,args.clone(),&mut changes));
                     let _=r.reply.send(out);
                 }
                 Kind::Finish(commit)=> {
@@ -194,13 +194,40 @@ impl Runtime {
     }
     fn op(&self,s:&mut Session,i:&Invocation,op:&str,a:Value,changes:&mut Vec<(String,Value)>)->Result<Value,OpError> {
         if s.ds().is_err() && !op.starts_with("ui.") && op!="canvas.overlay.set" { return Err(err("no document")); }
+        if crate::contract::EDIT_COMMANDS.contains(&op) || crate::contract::QUERY_COMMANDS.contains(&op) {
+            validate_args(&a, 0)?;
+            if matches!(op, "image.replace" | "image.place") && (a.get("path").is_some() || a.get("data").and_then(Value::as_str).is_none()) { return Err(err("image.replace requires inline data; paths are forbidden")); }
+            let rt = s.plugins.take();
+            let out = s.execute(op, &a).map_err(err);
+            s.plugins = rt;
+            return out;
+        }
         match op {
+            "export.svg" => {
+                validate_args(&a, 0)?;
+                let ids: Vec<figcraft_doc::NodeId> = serde_json::from_value(a["ids"].clone()).map_err(err)?;
+                if ids.is_empty() || ids.len() > 256 { return Err(err("export requires 1..256 layer ids")); }
+                let doc = s.doc().map_err(err)?;
+                for id in &ids { if doc.node(*id).is_none() { return Err(err("node missing")); } }
+                let settings = figcraft_doc::ExportSetting { format: figcraft_doc::ExportFormat::Svg, ..Default::default() };
+                let (bytes, _) = figcraft_engine::cmd::file::export_file(doc, &ids, &settings, 1.0).map_err(err)?;
+                if bytes.len() > 4 * 1024 * 1024 { return Err(err("export result too large")); }
+                Ok(json!({"svg":String::from_utf8(bytes).map_err(err)?}))
+            }
+            "node.children" => {
+                let doc = s.doc().map_err(err)?;
+                let n = doc.node(node_id(&a)?).ok_or_else(||err("node missing"))?;
+                if n.children.len() > 4096 { return Err(err("too many children")); }
+                Ok(json!(n.children.iter().filter_map(|id| doc.node(*id)).collect::<Vec<_>>()))
+            }
             "document.info"=>Ok(json!({"name":s.doc().map_err(err)?.name,"uid":s.ds().map_err(err)?.uid})),
             "page.list"=>Ok(json!(s.doc().map_err(err)?.pages.iter().filter_map(|id|s.doc().ok()?.node(*id)).collect::<Vec<_>>())),
             "selection.get"=>Ok(json!({"ids":s.selection()})),
+            "viewport.set"=> { validate_args(&a,0)?; let rt=s.plugins.take(); let out=s.execute("view.set",&a).map_err(err); s.plugins=rt; out },
             "viewport.get"=>serde_json::to_value(&s.ds().map_err(err)?.view).map_err(err),
             "node.get"=> { let id=node_id(&a)?; s.doc().map_err(err)?.node(id).ok_or_else(||err("node missing")).and_then(|n|serde_json::to_value(n).map_err(err)) },
             "node.create"|"node.update"|"node.delete"|"selection.set"=> {
+                validate_args(&a, 0)?;
                 let command=match op { "node.update"=>"node.set","node.delete"=>"edit.delete","selection.set"=>"select.set",other=>other };
                 if op=="node.delete" { let id=node_id(&a)?; if s.doc().map_err(err)?.node(id).is_none() {return Err(err("node missing"));} s.ds_mut().map_err(err)?.selection=vec![id]; }
                 let mut a=a; if op=="node.update" { if let Some(props)=a.get("props").cloned() { a=json!({"ids":[node_id(&a)?],"props":props}); } }
@@ -221,12 +248,12 @@ impl Runtime {
                     let base_rev = tree.map_or(sf.view.rev, |(_,a)| a["patch_rev"].as_u64().unwrap_or(sf.view.rev.saturating_add(1)));
                     let raw_tree = tree.map(|(_,a)| a["tree"].clone()).or_else(||sf.view.tree.clone()).ok_or_else(||err("form missing"))?;
                     let node: Node = serde_json::from_value(raw_tree).map_err(err)?;
-                    let Node::Form { mut form, values } = node else { return Err(err("patch requires root form")); };
+                    let Node::Form(craft_ext_core::ui::tree::FormNode { mut form, values, hidden, disabled }) = node else { return Err(err("patch requires root form")); };
                     let mut state = craft_ext_core::form::FormState { rev: base_rev, values, ..Default::default() };
                     // Preserve original conditions in staged metadata; show/enable restore them.
                     let metadata = match tree { Some((_,a)) => a.get("form_metadata").cloned(), None => st.form_metadata.get(&k).cloned() };
                     if let Some(metadata) = metadata { form = serde_json::from_value(metadata).map_err(err)?; }
-                    let mut flags = match tree { Some((_,a)) => a.get("form_flags").cloned(), None => st.form_flags.get(&k).cloned() }.unwrap_or(json!({}));
+                    let mut flags = match tree { Some((_,a)) => a.get("form_flags").cloned(), None => st.form_flags.get(&k).cloned() }.unwrap_or(json!({"hidden":hidden,"disabled":disabled}));
                     state.hidden = serde_json::from_value(flags["hidden"].clone()).unwrap_or_default();
                     state.disabled = serde_json::from_value(flags["disabled"].clone()).unwrap_or_default();
                     form.apply_patch(&mut state, &patch).map_err(err)?;
@@ -237,7 +264,7 @@ impl Runtime {
                         if state.hidden.contains(&p.key) { p.visible_when = Some(craft_ext_core::form::Cond::Any(vec![])); }
                         if state.disabled.contains(&p.key) { p.enabled_when = Some(craft_ext_core::form::Cond::Any(vec![])); }
                     }
-                    a["tree"] = serde_json::to_value(Node::Form { form, values: state.values }).map_err(err)?;
+                    a["tree"] = serde_json::to_value(Node::Form(craft_ext_core::ui::tree::FormNode { form, values: state.values, hidden: state.hidden.into_iter().collect(), disabled: state.disabled.into_iter().collect() })).map_err(err)?;
                     a["patch_rev"] = json!(patch.rev);
                     if op == "ui.window.open" && a.get("title").is_none() { a["title"] = json!(sf.view.title); }
                 }
@@ -248,7 +275,7 @@ impl Runtime {
                 if changes.len()>=64 {return Err(err("UI event budget exceeded"));}
                 changes.push((op.into(),a)); Ok(Value::Null)
             }
-            "canvas.overlay.set"=> { let ops=a.get("ops").cloned().unwrap_or(json!([])); let draw:Vec<craft_ext_core::ui::DrawOp>=serde_json::from_value(ops.clone()).map_err(err)?; validate_draw(&draw)?; changes.push((op.into(),ops)); Ok(Value::Null) },
+            "canvas.overlay.set"=> { let ops=a.get("ops").cloned().unwrap_or(json!([])); if !overlay_numbers(&ops) || serde_json::to_vec(&ops).map_err(err)?.len()>1024*1024 {return Err(err("overlay budget exceeded"));} let draw:Vec<craft_ext_core::ui::tree::DrawOp>=serde_json::from_value(ops.clone()).map_err(err)?; craft_ext_core::ui::tree::validate_draw_list(&draw).map_err(err)?; changes.push((op.into(),ops)); Ok(Value::Null) },
             "ui.notify"=> { changes.push((op.into(),a)); Ok(Value::Null) },
             _=>Err(OpError::new(Code::NotFound,"unknown operation")),
         }
@@ -271,11 +298,26 @@ impl Runtime {
 /// Failed events (not init) before a plugin is paused for the rest of the session.
 pub const PAUSE_AFTER:u32=3;
 fn node_id(a:&Value)->Result<figcraft_doc::NodeId,OpError> { a["id"].as_u64().map(figcraft_doc::NodeId).ok_or_else(||err("id missing")) }
-fn validate_draw(ops:&[craft_ext_core::ui::DrawOp])->Result<(),OpError> {
-    if ops.len()>craft_ext_core::ui::MAX_DRAW_OPS || serde_json::to_vec(ops).map_err(err)?.len()>1024*1024 {return Err(err("overlay budget exceeded"));}
-    let v=serde_json::to_value(ops).map_err(err)?;
-    fn finite(v:&Value)->bool { match v {Value::Number(n)=>n.as_f64().is_some_and(|n|n.is_finite() && n.abs()<=1e8),Value::Array(a)=>a.iter().all(finite),Value::Object(o)=>o.values().all(finite),_=>true} }
-    if !finite(&v) {return Err(err("invalid draw coordinates"));} Ok(())
+// Keep FigCraft's page-coordinate bound in addition to the shared draw vocabulary checks.
+fn overlay_numbers(v: &Value) -> bool {
+    match v {
+        Value::Number(n) => n.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1e8),
+        Value::Array(v) => v.iter().all(overlay_numbers),
+        Value::Object(v) => v.values().all(overlay_numbers),
+        _ => true,
+    }
+}
+/// Bounds work before engine argument parsing, including nested properties and inline images.
+fn validate_args(a: &Value, depth: usize) -> Result<(), OpError> {
+    if depth == 0 && serde_json::to_vec(a).map_err(err)?.len() > 256 * 1024 { return Err(err("argument budget exceeded")); }
+    if depth > 32 { return Err(err("arguments too deep")); }
+    match a {
+        Value::Array(v) => { if v.len() > 4096 { return Err(err("array too large")); } for x in v { validate_args(x, depth+1)?; } }
+        Value::Object(v) => { for x in v.values() { validate_args(x, depth+1)?; } }
+        Value::Number(n) if n.as_f64().is_none_or(|v| !v.is_finite() || v.abs() > 1e8) => return Err(err("number out of range")),
+        _ => {}
+    }
+    Ok(())
 }
 #[derive(Clone)]
 enum Program { Wasm(Plugin), Native(ExtensionId,Version,PathBuf,PathBuf) }
@@ -299,7 +341,7 @@ impl PluginRuntime for Runtime {
         let cancel={let st=lock(&self.state); st.gesture.as_ref().is_some_and(|g|s.ds().map_or(true,|d|d.uid!=g.uid) || self.grants.stopped(&g.owner.plugin,g.owner.version) || self.grants.generation(&g.owner.plugin)!=g.generation)};
         if cancel {self.tool_event(s,"cancel",[0.,0.],Value::Null);}
         for _ in 0..64 { if lock(&self.deferred).is_empty() && lock(&self.rx).try_recv().map(|r|lock(&self.deferred).push_back(r)).is_err() {break;} self.serve(s); }
-        let Ok(d)=s.ds() else {lock(&self.state).seen=None;return}; let now=(d.uid,json!(d.selection),d.page.0);
+        let Ok(d)=s.ds() else {lock(&self.state).seen=None;return}; let now=(d.uid,json!(d.selection),d.page.0,d.revision);
         let previous=lock(&self.state).seen.replace(now.clone());
         let mut events=Vec::new();
         if previous.as_ref().is_none_or(|p|p.0!=now.0) {
@@ -310,6 +352,7 @@ impl PluginRuntime for Runtime {
         }
         if previous.as_ref().is_none_or(|p|p.1!=now.1) {events.push("selection.changed");}
         if previous.as_ref().is_none_or(|p|p.2!=now.2 || p.0!=now.0) {events.push("page.changed");}
+        if previous.as_ref().is_some_and(|p|p.0==now.0 && p.3!=now.3) {events.push("document.changed");}
         let cs=lock(&self.state).contributions.clone();
         if !self.busy() { for c in cs {if c.declared.iter().any(|p|*p==Permission::AppEvents) && self.grants.allowed(&c.plugin,&Permission::AppEvents) {for event in &events {let _=self.deliver(s,&c,json!({"event":"app","type":event,"name":event}),false);}}} }
     }
@@ -354,7 +397,7 @@ impl PluginRuntime for Runtime {
             let gesture=lock(&self.state).gesture.take();
             if let Some(g)=gesture {let mut inv=self.invocation(&g.owner); inv.grant_generation=g.generation;
                 let (reply,_)=mpsc::channel();
-                let original=Request {inv,context:Dispatch {uid:g.uid,hash:g.owner.reference.sha256.clone(),surface:None,completion:Arc::new(Mutex::new(None))},kind:Kind::Begin,reply};
+                let original=Request {inv,context:Dispatch {read_only:false,uid:g.uid,hash:g.owner.reference.sha256.clone(),surface:None,completion:Arc::new(Mutex::new(None))},kind:Kind::Begin,reply};
                 let valid=self.validate(s,&original);
                 if let Err(e)=&valid { result=Err(e.to_string()); }
                 s.finish_group(g.mark,&format!("{} · {}",c.label,c.name),phase=="commit" && result.is_ok() && valid.is_ok());}

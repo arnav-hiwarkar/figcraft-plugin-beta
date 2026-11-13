@@ -17,7 +17,7 @@ flock $LOCK env CARGO_BUILD_JOBS=4 cargo build -p figcraft-cli
 CE=../craft-extensions
 # craft-ext (author tool); skip if $CE/target/debug/craft-ext exists
 (cd $CE && flock $LOCK env CARGO_BUILD_JOBS=4 cargo build -p craft-ext-cli)
-(cd $CE/examples/figcraft-shapes && flock $LOCK env CARGO_BUILD_JOBS=4 ../../target/debug/craft-ext build \
+(cd $CE/examples/figcraft-shapes && flock $LOCK env CARGO_BUILD_JOBS=4 ../../target/debug/craft-ext build --release \
   && ../../target/debug/craft-ext check && ../../target/debug/craft-ext pack --out figcraft-shapes.craftplugin)
 
 export CRAFT_EXT_DIR="$(mktemp -d /tmp/figcraft-plugin-beta.XXXXXX)"
@@ -108,14 +108,14 @@ flock $LOCK env CARGO_BUILD_JOBS=4 cargo build -p figcraft
    is cancelled with a “revoked” toast. Allow it again: they come back.
 6. Disable Shapes in the Plugins window: its docked panel disappears and the canvas widens. Enable it
    again: the panel comes back on the same side. (Pausing needs a plugin that fails three times; the
-   Plugins window then lists it under "Problems this session" with **Resume**. Headless:
+   Plugins window then lists it under "Problems this session" inside the manager Problems tab with **Resume**. Headless:
    `figcraft-cli plugin resume <id>` explains that pauses last one session, and a `run --plugins` script
    can contain `{"command":"plugins.resume","params":{"id":"<id>"}}`.)
 7. **File ▸ Save as…** a `.figcraft`, close it, remove Shapes in the Plugins window, reopen the file:
    the project prompt lists Shapes as missing; **Open without them** opens the file with every layer intact.
 
-The renderer stays egui: `figcraft_ui_egui::plugins_ui::render_surface` is the single function to
-swap for craft-framework's form renderer later.
+The app selects the shared renderer through the saved `plugin_ui_engine` preference (default
+`egui`; `framework` currently falls back to egui). Plugins cannot change it.
 
 ## Verified run (2026-11-13, Linux x86_64, debug)
 
@@ -128,3 +128,49 @@ swap for craft-framework's form renderer later.
   catalogue (serial 11); the contract matches the shared page byte for byte.
 - The desktop binary was built once (10 min), `target/debug/figcraft`. No GUI was launched: the clicks in
   section 4 are for the beta tester.
+
+
+## Session 1.1 examples and focused regression checks
+
+Build/pack `figcraft-grid` and `figcraft-placeholder` from `../craft-extensions/examples/`
+with `craft-ext build --release`, `craft-ext check`, `craft-ext test`, and
+`craft-ext pack --out <directory-name>.craftplugin`. Build wasm in release; apps in debug.
+The packages are tested by:
+
+```sh
+FIGCRAFT_EXAMPLES_DIR="$PWD/../craft-extensions/examples" CARGO_BUILD_JOBS=4 \
+  flock /home/ash/projects/plugin-beta/.cargo.lock cargo test -p figcraft-plugins new_examples_end_to_end -- --ignored
+```
+
+This installs each package into a disposable store, validates its UI 1.1 tree, runs its
+command, checks the document change and single undo step, saves/reopens plugin references,
+revokes edit access and verifies no history change, then removes the package.
+`figcraft-plugins` also checks argument budgets, inline-image path refusal and shared draw validation.
+Run `figcraft-ui-egui` filters `plugin_host_tests`, `idle_tests` and `live_chat_tests`, and
+`figcraft-engine` filter `shortcut_parity_tests`. Font-dependent mind-map tests are untouched.
+
+CLI scripts use `plugin.io.github.arnav-hiwarkar.figcraft-grid.apply` and
+`plugin.io.github.arnav-hiwarkar.figcraft-placeholder.apply` with `run --plugins`.
+For placeholder, precede it with `text.create {text,x,y}` so there is selected text.
+
+### Session 1.1 verification (2026-11-13, Linux)
+
+- Both new examples: `craft-ext build --release`, `check`, `test`, `pack` passed.
+  The author tool explicitly reports no automatic panel/command tests; adapter tests below
+  provide the behavioral coverage instead.
+- `figcraft-plugins --lib -- --include-ignored`: **25 passed**, including real Shapes,
+  Grid and Placeholder packages. The new examples exercise form/text-area/toggle edits,
+  command execution, a single undo restoring the entire document, redo, save/reopen and
+  grant revocation. Inline image path rejection, bounded arguments, SVG export, shared
+  overlay validation and read-only `document.changed` notifications are covered.
+- UI: `plugin_host_tests` **5**, `idle_tests` **19**, `live_chat_tests` **3** passed.
+  Engine: `shortcut_parity_tests` **7**, `ext_tests` **5** passed.
+- Debug build of `figcraft` and `figcraft-cli` passed (repository dev profile).
+- Real CLI with a disposable store: install-file/setup each new package, `run --plugins`
+  and save, `info`/`plugin project` after reopen (ready), revoke edit (command refused and
+  script rolled back), remove plugin, reopen (layers retained, plugin unavailable).
+  Grid saved six cards in a grid frame; Placeholder changed the selected text layer.
+- `plugin contract` regenerated the shared FigCraft contract page at session 1.1.
+
+No desktop GUI was launched; visual layout and clicking Resume remain manual checks.
+Font-dependent mind-map tests were neither modified nor run.

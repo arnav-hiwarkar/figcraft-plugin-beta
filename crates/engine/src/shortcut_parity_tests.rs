@@ -25,6 +25,7 @@ enum Ours {
     Bound(&'static str),
     /// Bound to this command on other keys where the documented ones collide with another
     /// documented shortcut: (command, macOS keys, Windows/Linux keys; empty: the macOS keys).
+    #[allow(dead_code)]
     Moved(&'static str, &'static [&'static str], &'static [&'static str]),
     /// A held key, pointer gesture or presentation key; the shortcuts panel lists it under this label.
     Gesture(&'static str),
@@ -89,8 +90,8 @@ static ROWS: &[Row] = &[
     doc(Essential, "Chat at your cursor in a live session", &["/"], &[], Bound("collab.cursorChat"), ""),
     doc(Essential, "Sample a colour", &["I", "Ctrl+C"], &["I"], Bound("edit.pickColor"), "Control+C on macOS only (Ctrl+C copies elsewhere)"),
     doc(Essential, "Save to version history", &["Alt+Cmd+S"], &["Ctrl+Alt+S"], Bound("file.saveVersion"), ""),
-    doc(Essential, "Run the last plugin", &["Alt+Cmd+P"], &["Ctrl+Alt+P"], Moved("plugins.runLast", &["Alt+Cmd+P"], &["Ctrl+Alt+Shift+P"]),
-        "conflict: the documentation also gives Ctrl+Alt+P to pixel preview on Windows; pixel preview keeps it, the plugin takes Ctrl+Alt+Shift+P"),
+    doc(Essential, "Run the last plugin", &["Alt+Cmd+P"], &["Ctrl+Alt+P"], Missing,
+        "Retired legacy plugin action; use the plugin command from Actions"),
     pin(Essential, "view.fullscreen", &["Ctrl+Cmd+F"], &["F11"]),
     pin(Essential, "app.preferences", &["Cmd+,"], &[]),
     pin(Essential, "file.new", &["Cmd+N"], &[]).reserved(BROWSER_TAB),
@@ -417,7 +418,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (137, 136, 1, 0, 2, 57));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (137, 136, 0, 1, 2, 57));
 }
 
 #[test]

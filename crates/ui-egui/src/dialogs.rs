@@ -279,7 +279,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 ui.add_space(8.0);
-                crate::plugins_ui::preferences_row(ui);
+                crate::plugins_ui::preferences_row(app, ui);
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {

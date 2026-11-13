@@ -54,8 +54,8 @@ fn shapes_example_end_to_end() {
     s.plugins = Some(rt.clone());
     let sf = panel(&rt);
     let tree: Node = serde_json::from_value(sf.tree.clone().expect("init drew the panel")).unwrap();
-    let Node::Column { children } = &tree else { panic!("panel root is a column: {tree:?}") };
-    let Some(Node::Form { form, values }) = children.first() else { panic!("first child is a form: {children:?}") };
+    let Node::Column(craft_ext_core::ui::tree::Stack { children, .. }) = &tree else { panic!("panel root is a column: {tree:?}") };
+    let Some(Node::Form(craft_ext_core::ui::tree::FormNode { form, values, .. })) = children.first() else { panic!("first child is a form: {children:?}") };
     assert_eq!(form.key, "shapes");
     assert!(form.validate_values(values).is_ok());
     let keys: Vec<&str> = form.params.iter().map(|p| p.key.as_str()).collect();
@@ -175,4 +175,52 @@ fn shapes_example_end_to_end() {
     let prompt = fresh.take_project_prompt().expect("opening shows the project prompt");
     assert!(prompt.iter().any(|(r, st)| r.id.as_str() == ID && !st.ready()), "{prompt:?}");
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "needs FIGCRAFT_EXAMPLES_DIR containing packed grid and placeholder examples"]
+fn new_examples_end_to_end() {
+    let packages = std::path::PathBuf::from(std::env::var_os("FIGCRAFT_EXAMPLES_DIR").expect("set FIGCRAFT_EXAMPLES_DIR"));
+    for slug in ["figcraft-grid", "figcraft-placeholder"] {
+        let root = std::env::temp_dir().join(format!("{slug}-e2e-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let rt = Runtime::new(root.clone()).unwrap();
+        let m = rt.manager();
+        let id = format!("io.github.arnav-hiwarkar.{slug}");
+        let package = packages.join(slug).join(format!("{slug}.craftplugin"));
+        cli(&m, &["install-file", package.to_str().unwrap()]).unwrap();
+        cli(&m, &["setup", &id, "--all", "--grant", "document.edit:document", "--grant", "document.read:document"]).unwrap();
+        let mut s = Session::new();
+        let text = s.execute("text.create", &json!({"text":"Before", "x":0,"y":0})).unwrap()["id"].clone();
+        rt.load(&mut s).unwrap(); s.plugins = Some(rt.clone());
+        for surface in rt.surfaces() { Node::parse(surface.tree.as_ref().unwrap()).unwrap(); rt.set_open(&surface.key, true); }
+        let edits = if slug == "figcraft-grid" { vec![("columns", json!(2)), ("rows", json!(3))] }
+            else { vec![("copy", json!("Preview copy for your next idea.")), ("all", json!(true))] };
+        for (widget, value) in edits {
+            let surface = rt.surfaces().into_iter().next().unwrap();
+            rt.ui_event(&mut s, &surface.key, surface.rev, widget, value);
+            assert!(s.message.is_none(), "{slug}: {:?}", s.message);
+        }
+        let before = undo_len(&s);
+        let before_doc = json!(s.doc().unwrap());
+        let cmd = format!("plugin.{id}.apply");
+        rt.run_command(&mut s, &cmd, &json!({})).unwrap();
+        assert_eq!(undo_len(&s), before+1, "{slug}: one undo step");
+        if slug == "figcraft-grid" { assert_eq!(named(&s,"Card ").len(),7); }
+        else { assert!(serde_json::to_string(s.doc().unwrap().node(figcraft_doc::NodeId(text.as_u64().unwrap())).unwrap()).unwrap().contains("Preview copy for your next idea.")); }
+        let after_doc = json!(s.doc().unwrap());
+        s.undo().unwrap(); assert_eq!(json!(s.doc().unwrap()), before_doc, "one undo restores the whole document");
+        s.redo().unwrap(); assert_eq!(json!(s.doc().unwrap()), after_doc);
+        let file = root.join("example.figcraft");
+        std::fs::write(&file, figcraft_engine::cmd::file::file_bytes(s.ds().unwrap()).unwrap()).unwrap();
+        let mut reopened = Session::empty(); reopened.execute("file.open", &json!({"path":file})).unwrap();
+        assert!(m.check_project(&reopened.doc().unwrap().plugins).unwrap().iter().all(|(_,st)|st.ready()));
+        cli(&m, &["revoke", &id, "document.edit:document"]).unwrap();
+        let undo = undo_len(&s);
+        assert!(rt.run_command(&mut s, &cmd, &json!({})).is_err());
+        assert_eq!(undo_len(&s),undo,"revocation changes nothing");
+        cli(&m, &["remove", &id]).unwrap();
+        assert!(m.check_project(&reopened.doc().unwrap().plugins).unwrap().iter().all(|(_,st)|!st.ready()));
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

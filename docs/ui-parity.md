@@ -152,8 +152,8 @@ in the table. `crates/ui-egui/src/shortcut_keys_tests.rs` drives the keys a look
 | Documented shortcuts (rows) | 137 | each with macOS and Windows/Linux keys |
 | Bound as documented | 136 (110 before this suite) | 113 keymap bindings, 15 held keys, gestures and presentation keys, 6 vector edit tool keys |
 | Bound as documented | 136 (110 before this suite) | 113 keymap bindings, 16 held keys, gestures and presentation keys, 6 vector edit tool keys |
-| Bound on other keys (documented conflict) | 1 | Run last plugin: the documentation also gives Ctrl+Alt+P to pixel preview on Windows; the plugin takes Ctrl+Alt+Shift+P there |
-| Missing | 0 | moving the rotation origin (Alt+R, `transform.rotationOrigin`) and placing an object with Enter after choosing its tool (`tool.place`) were the last two |
+| Bound on other keys (documented conflict) | 0 | |
+| Missing | 1 | Run last plugin: retired legacy plugin action; use the plugin command from Plugins or Actions |
 | Documented keys a platform keeps | 2 | Ctrl+Space (Windows/Linux keyboard box selection) switches some CJK input methods; F6 goes to a browser's address bar in the web build |
 | Undocumented bindings pinned | 57 | of which Cmd/Ctrl+W, Cmd/Ctrl+N and Ctrl+Tab are taken by browsers (web build) and Ctrl+Alt+T / Ctrl+Alt+L by some Linux desktops |
 

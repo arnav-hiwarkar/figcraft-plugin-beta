@@ -67,7 +67,7 @@ impl Fixture {
     fn dispatch(&self, s: &mut Session, calls: Vec<(&str, Value)>, commit: bool) -> (Vec<Result<Value, OpError>>, Result<(), String>) {
         let inv = self.rt.invocation(&self.owner);
         let context =
-            Dispatch { uid: s.ds().map_or(0, |d| d.uid), hash: Some("digest".into()), surface: None, completion: Arc::new(Mutex::new(None)) };
+            Dispatch { read_only: false, uid: s.ds().map_or(0, |d| d.uid), hash: Some("digest".into()), surface: None, completion: Arc::new(Mutex::new(None)) };
         let mut replies = Vec::new();
         let kinds = std::iter::once(Kind::Begin)
             .chain(calls.into_iter().map(|(op, a)| Kind::Call(op.into(), a)))
@@ -136,7 +136,7 @@ fn grant_reads_fail_closed_and_generation_changes_are_immediate() {
     let s = Session::new();
     let r = Request {
         inv,
-        context: Dispatch { uid: s.ds().unwrap().uid, hash: Some("digest".into()), surface: None, completion: Arc::new(Mutex::new(None)) },
+        context: Dispatch { read_only: false, uid: s.ds().unwrap().uid, hash: Some("digest".into()), surface: None, completion: Arc::new(Mutex::new(None)) },
         kind: Kind::Begin,
         reply,
     };
@@ -416,7 +416,7 @@ fn form_patches_are_staged_atomic_and_revision_checked() {
     f.rt.apply(&inv, staged);
     let st = lock(&f.rt.state);
     let node:Node = serde_json::from_value(st.surfaces[&k].view.tree.clone().unwrap()).unwrap();
-    let Node::Form { form, values } = node else { panic!("expected form") };
+    let Node::Form(craft_ext_core::ui::tree::FormNode { form, values, .. }) = node else { panic!("expected form") };
     assert!(form.params[0].visible_when.is_none());
     assert_eq!(values["amount"], craft_ext_core::form::Value::Number(5.0));
     assert_eq!(st.surfaces[&k].view.rev, 3);
@@ -566,4 +566,66 @@ fn canvas_overlay_shows_during_a_gesture_clears_at_its_end_and_refuses_bad_coord
     assert!(f.rt.overlays().is_empty());
     lock(&f.rt.state).workers.clear();
     worker.join().unwrap();
+}
+
+#[test]
+fn expanded_contract_uses_validated_engine_commands_and_bounded_arguments() {
+    let f = Fixture::new();
+    let mut s = Session::new();
+    let (reply, done) = f.dispatch(&mut s, vec![
+        ("page.add", json!({"name":"Plugin page"})),
+        ("style.create", json!({"type":"paint","name":"Accent","value":[{"type":"solid","color":"#336699"}]})),
+    ], true);
+    assert!(reply[1].is_ok(), "{reply:?}");
+    assert!(done.is_ok());
+    assert_eq!(s.ds().unwrap().history.undo.len(), 1);
+    let inv = f.rt.invocation(&f.owner);
+    for op in ["image.replace", "image.place"] {
+        assert!(f.rt.op(&mut s, &inv, op, json!({"path":"/tmp/forbidden"}), &mut vec![]).is_err());
+    }
+    assert!(validate_args(&json!({"ids":vec![1;4097]}),0).is_err());
+    assert!(validate_args(&json!({"text":"x".repeat(256*1024)}),0).is_err());
+    let contract = crate::contract::contract().unwrap();
+    for op in crate::contract::EDIT_COMMANDS.iter().chain(crate::contract::QUERY_COMMANDS) {
+        assert!(figcraft_engine::find_command(op).is_some(), "stale engine operation {op}");
+        assert!(contract.ops.iter().any(|s| s.id == *op));
+    }
+}
+
+#[test]
+fn ui_v2_and_shared_overlay_validation_reach_the_adapter() {
+    let f = Fixture::new();
+    let mut s = Session::new();
+    let inv = f.rt.invocation(&f.owner);
+    let mut changes = Vec::new();
+    assert!(f.rt.op(&mut s, &inv, "canvas.overlay.set", json!({"ops":[{"op":"line","from":[0,0],"to":[10,20],"width":1,"rgba":[1,0,0,1]}]}), &mut changes).is_ok());
+    assert!(f.rt.op(&mut s, &inv, "canvas.overlay.set", json!({"ops":[{"op":"circle","center":[0,0],"radius":-1,"fill":[1,0,0,1]}]}), &mut changes).is_err());
+    assert!(Node::parse(&json!({"type":"scroll","children":[{"type":"label","text":"UI 1.1"}]})).is_ok());
+}
+
+#[test]
+fn export_returns_svg_without_files_and_new_operations_obey_revocation() {
+    let mut f = Fixture::new();
+    let mut s = Session::new();
+    let id = s.execute("node.create", &json!({"type":"rectangle","width":20,"height":20})).unwrap()["id"].clone();
+    let (reply, done) = f.dispatch(&mut s, vec![("export.svg", json!({"ids":[id]}))], true);
+    assert!(done.is_ok());
+    assert!(reply[1].as_ref().unwrap()["svg"].as_str().unwrap().contains("<svg"));
+    let before = s.doc().unwrap().pages.len();
+    let setup = f.state.apps.get_mut(&f.rt.app).unwrap().get_mut(&f.owner.plugin).unwrap();
+    setup.grants.clear(); setup.grant_generation += 1; f.save();
+    let (reply, _) = f.dispatch(&mut s, vec![("page.add",json!({"name":"Denied"}))], true);
+    assert!(reply[1].is_err());
+    assert_eq!(s.doc().unwrap().pages.len(), before);
+}
+
+#[test]
+fn document_changed_notifications_cannot_create_an_edit_feedback_loop() {
+    let f = Fixture::new(); let mut s = Session::new();
+    let before = s.doc().unwrap().nodes().count();
+    let (_, worker) = recording_worker(&f, |_| vec![("node.create".into(), json!({"type":"rectangle"}))]);
+    f.rt.deliver(&mut s, &f.owner, json!({"event":"app","name":"document.changed"}), true).unwrap();
+    assert_eq!(s.doc().unwrap().nodes().count(), before);
+    assert!(s.ds().unwrap().history.undo.is_empty());
+    lock(&f.rt.state).workers.clear(); worker.join().unwrap();
 }

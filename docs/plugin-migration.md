@@ -56,7 +56,7 @@ startup, after startup files open). Done:
   the plugin's workers with a fresh instance of its stored program (in-memory state is lost) and sends
   `init` again. Session commands `plugins.paused` and `plugins.resume {id}` reach it from the UI,
   scripts (`figcraft-cli run --plugins`), automation and MCP. The Plugins window shows "Problems this
-  session" (name, id, last error, **Resume**) above the shared manager. Pauses are per session and
+  session" (name, id, last error, **Resume**) inside the shared manager Problems tab. Pauses are per session and
   never saved; `figcraft-cli plugin resume <id>` says so and prints the script step. A store change
   (enable, disable, grant, update) also starts plugins unpaused, as before.
 - CANVAS PATHS (verified): canvas-widget pointer events reach the guest as `ui` events with the
@@ -74,8 +74,8 @@ Remaining (named TODOs):
 - SCOPE: replace conservative document grants for selected-target get/update/delete with
   host-captured selection authorization (Begin already captures the selection); guest JSON cannot
   determine permission scope.
-- CONTRACT-DOCS: regenerate the shared contract markdown; replace empty operation examples with
-  validated request/result schemas.
+- CONTRACT-DOCS (done): the shared markdown is generated from the session 1.1 contract,
+  including canonical engine argument descriptions, permission rules and adapter limits.
 - LEGACY-REMOVAL: complete (old crate, SDK/examples, runtime/widget commands, directory transport,
   UI management/panels/palette/settings, xtask hooks). Retired collaboration tags keep their slots
   and refuse decoding; plugin_data stays opaque; unknown preferences round-trip.
@@ -173,7 +173,52 @@ point and follows a zoom or pan mid-gesture; docking, disable/re-enable restore,
 rules; canvas widget down/drag/up). Not verified in a running GUI (no display here): the dock's look,
 the tab context menu and the Resume button.
 
-Shared follow-up (craft-extensions, not changed here): `ManagerView` has no hook for host problems
-with actions. FigCraft draws its paused list above the shared view; `set_problems` would be
-overwritten by the next update check and has no Resume. A `ManagerView::set_session_problems(Vec<(id,
-reason)>) -> resumed ids` (or a callback) would let the Problems tab own it in every app.
+## Shared renderer and capabilities (session 1.1)
+
+Panels, docked panels, windows and forms use `craft_ext_ui::plugin_ui::PluginUi`;
+canvas overlays use its `paint_ops` with the current page-to-screen transform.
+The saved host preference `plugin_ui_engine` chooses `egui` (default) or `framework`
+(currently falls back to egui). Plugins cannot select a renderer. UI 1.0 trees still work.
+The adapter validates UI 1.1 trees and draw lists with the shared validators.
+
+`ManagerView::show_with_app_problems` places paused plugins and Resume in Problems.
+Only busy plugin gestures schedule periodic frames; installed commands and panels do not
+keep an idle document repainting. Store changes reconcile on the next app frame.
+The retired `plugins.runLast` key binding was removed along with its stale parity expectation.
+
+The session contract now exposes an explicit allowlist of engine operations for pages,
+components/instances, styles/variables, auto layout tracks, inline images, vector creation,
+text and comments. `node.children` reads direct children; `export.svg` returns SVG text.
+All document writes require document edit permission; reads require document read permission.
+Engine argument validation is retained, with additional 256 KiB argument, depth 32 and
+4096-element array limits. SVG exports accept 1–256 existing layers and return at most 4 MiB.
+Image placement/replacement only accepts inline base64 data; filesystem paths are refused.
+No file, library, network, shell or process command is forwarded.
+
+`figcraft-grid` and `figcraft-placeholder` are FigCraft-only UI 1.1 examples. The grid
+uses a typed form and layout tracks; placeholder copy uses a multiline editor and
+updates selected text layers while preserving other layer types. Each Apply is one undo step.
+
+### Capability audit
+
+| Design feature | Plugin surface |
+| --- | --- |
+| Pages | list/add/rename/delete/duplicate/move/background/select |
+| Frames and shapes | node.create/update/get/children/find/reparent/reorder, grouping, resize-to-fit, booleans |
+| Text | text.create, node.update characters and text properties, text-on-path |
+| Components and instances | create/set/variants, instance create/swap/properties, detach/reset |
+| Styles and variables | list/create/apply/update/delete, collections/modes, bindings |
+| Images | inline image.place/replace and image.adjust; no OS paths |
+| Auto layout | node.update layout properties, layout.add/remove/setTrack |
+| Vector paths | vector.create SVG path/points, node.update, flatten, outline stroke, booleans |
+| Selection | selection.get/set, node.find; scope remains host-controlled |
+| Viewport | viewport.get/set; no document permission required |
+| Export | export.svg returns a bounded string; disk export remains unavailable |
+| Comments | list/add/reply/resolve; engine text and target validation applies |
+| Events | document.opened/changed, page.changed, selection.changed; app.events required |
+
+The new `document.changed` notification is read-only to prevent edit-feedback loops. Existing
+app-event behavior is preserved. Events are coalesced at the next pump;
+`document.changed` covers document revision changes, including undo/redo. They do not carry
+raw document data. The existing wasm host enforces permissions, per-event fuel/deadlines,
+reply limits, rollback and grant-generation checks for the new operations too.

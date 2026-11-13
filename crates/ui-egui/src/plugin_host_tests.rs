@@ -339,7 +339,7 @@ fn layout_tabs_order_activity_and_limits() {
 /// → `up`, in the widget's own coordinates; a click is a `down` and an `up`.
 #[test]
 fn canvas_widget_reports_down_drag_and_up_in_canvas_coordinates() {
-    let node: craft_ext_core::ui::Node =
+    let node: craft_ext_core::ui::tree::Node =
         serde_json::from_value(json!({"type":"canvas","id":"pad","label":"Pad","width":200.0,"height":100.0,"ops":[]})).unwrap();
     let ctx = egui::Context::default();
     let origin = Pos2::new(20.0, 30.0);
