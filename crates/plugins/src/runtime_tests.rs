@@ -696,7 +696,8 @@ fn document_changed_follows_content_not_selection_view_or_rollback_and_wakes_the
     } else { vec![] });
     let names = |seen: &Arc<Mutex<Vec<Value>>>| lock(seen).iter().filter_map(|e| e["name"].as_str().map(str::to_string)).collect::<Vec<_>>();
     let mut s = Session::new();
-    let id = s.execute("node.create", &json!({"type":"rectangle","width":20,"height":20})).unwrap()["id"].clone();
+    // node.create selects the new node by default; keep it unselected so selecting it is a change.
+    let id = s.execute("node.create", &json!({"type":"rectangle","width":20,"height":20,"select":false})).unwrap()["id"].clone();
     f.rt.pump(&mut s);
     serve_until(&f, &mut s, || woken.load(Ordering::Relaxed) > 0 && !names(&seen).is_empty() && lock(&f.rt.deferred).is_empty());
     assert!(woken.load(Ordering::Relaxed) > 0, "a queued worker request wakes the UI");
