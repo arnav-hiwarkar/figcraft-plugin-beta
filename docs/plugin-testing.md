@@ -12,7 +12,7 @@ All builds are debug builds and take the shared resource lock.
 From the FigCraft repository:
 
 ```sh
-LOCK=/home/ash/projects/plugin-beta/.cargo.lock
+LOCK=$ROOT/.cargo.lock
 flock $LOCK env CARGO_BUILD_JOBS=4 cargo build -p figcraft-cli
 CE=../craft-extensions
 # craft-ext (author tool); skip if $CE/target/debug/craft-ext exists
@@ -21,7 +21,7 @@ CE=../craft-extensions
   && ../../target/debug/craft-ext check && ../../target/debug/craft-ext pack --out figcraft-shapes.craftplugin)
 
 export CRAFT_EXT_DIR="$(mktemp -d /tmp/figcraft-plugin-beta.XXXXXX)"
-export CRAFT_CATALOGUE_URL=file:///home/ash/projects/plugin-beta/test-catalogue/
+export CRAFT_CATALOGUE_URL=file://$ROOT/test-catalogue/
 export CRAFT_CATALOGUE_ALLOW_FILE=1
 CLI=./target/debug/figcraft-cli
 ID=io.github.arnav-hiwarkar.figcraft-shapes
@@ -141,7 +141,7 @@ The packages are tested by:
 
 ```sh
 FIGCRAFT_EXAMPLES_DIR="$PWD/../craft-extensions/examples" CARGO_BUILD_JOBS=4 \
-  flock /home/ash/projects/plugin-beta/.cargo.lock cargo test -p figcraft-plugins new_examples_end_to_end -- --ignored
+  flock $ROOT/.cargo.lock cargo test -p figcraft-plugins new_examples_end_to_end -- --ignored
 ```
 
 This installs each package into a disposable store, validates its UI 1.1 tree, runs its
