@@ -28,6 +28,9 @@ pub trait PluginRuntime: Send + Sync {
     fn selected_tool(&self) -> Option<String> { None }
     fn busy(&self) -> bool;
     fn overlays(&self) -> Vec<Value>;
+    /// Whether a pump would do work now (queued plugin requests, or a document, selection, page or
+    /// content change not yet delivered as app events): the UI then asks for one more frame.
+    fn wants_pump(&self, _s: &Session) -> bool { false }
     /// Plugins paused after three failures this session.
     fn paused(&self) -> Vec<PausedPlugin> { Vec::new() }
     /// Clears a paused plugin's failure count and starts fresh instances of its modules.

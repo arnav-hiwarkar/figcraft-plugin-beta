@@ -486,6 +486,7 @@ fn recording_worker(f: &Fixture, calls: impl Fn(&Value) -> Vec<(String, Value)> 
     let (tx, rx) = mpsc::sync_channel::<Job>(8);
     lock(&f.rt.state).workers.insert(f.owner.worker.clone(), tx);
     let requests = f.rt.tx.clone();
+    let waker = f.rt.waker.clone();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let log = seen.clone();
     let handle = std::thread::spawn(move || {
@@ -494,10 +495,9 @@ fn recording_worker(f: &Fixture, calls: impl Fn(&Value) -> Vec<(String, Value)> 
             let kinds = std::iter::once(Kind::Begin)
                 .chain(calls(&job.event).into_iter().map(|(op, a)| Kind::Call(op, a)))
                 .chain(std::iter::once(Kind::Finish(true)));
+            let bridge = Bridge { contract: contract().unwrap(), tx: requests.clone(), context: Arc::new(Mutex::new(Some(job.context.clone()))), waker: waker.clone() };
             for kind in kinds {
-                let (reply, rx) = mpsc::channel();
-                requests.send(Request { inv: job.inv.clone(), context: job.context.clone(), kind, reply }).unwrap();
-                let _ = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                let _ = bridge.ask(&job.inv, kind);
             }
             job.done.send(Ok(())).unwrap();
         }
@@ -628,4 +628,101 @@ fn document_changed_notifications_cannot_create_an_edit_feedback_loop() {
     assert_eq!(s.doc().unwrap().nodes().count(), before);
     assert!(s.ds().unwrap().history.undo.is_empty());
     lock(&f.rt.state).workers.clear(); worker.join().unwrap();
+}
+
+#[test]
+fn live_session_layer_ids_pass_argument_bounds() {
+    // In a live session ids are `client << 32 | counter`, far past the 1e8 coordinate bound.
+    let f = Fixture::new();
+    let mut s = Session::new();
+    s.doc_mut().unwrap().set_client_id(7);
+    let id = s.execute("node.create", &json!({"type":"rectangle","width":20,"height":20})).unwrap()["id"].as_u64().unwrap();
+    assert!(id > 1 << 32, "{id}");
+    let (reply, done) = f.dispatch(&mut s, vec![
+        ("node.update", json!({"id":id,"props":{"name":"Live"}})),
+        ("selection.set", json!({"ids":[id]})),
+        ("object.group", json!({"ids":[id]})),
+    ], true);
+    assert!(reply[1..4].iter().all(Result::is_ok), "{reply:?}");
+    assert!(done.is_ok());
+    // Coordinates keep their bound.
+    assert!(validate_args(&json!({"x":-1e9}), 0).is_err());
+    assert!(validate_args(&json!({"x":1.5e8}), 0).is_err());
+    for key in ["width", "height", "zoom", "x", "time"] {
+        assert!(validate_args(&json!({key:u64::MAX}), 0).is_err(), "{key}");
+    }
+    assert!(validate_args(&json!({"props":{"width":u64::MAX}}), 0).is_err());
+    assert!(validate_args(&json!({"ids":[id],"parent":id}), 0).is_ok());
+}
+
+#[test]
+fn comments_cannot_be_signed_as_someone_else() {
+    let f = Fixture::new();
+    let mut s = Session::new();
+    let (reply, _) = f.dispatch(&mut s, vec![("comment.add", json!({"x":0,"y":0,"text":"hi","author":"Sam"}))], true);
+    assert!(reply[1].as_ref().unwrap_err().to_string().contains("author"), "{reply:?}");
+    let (reply, done) = f.dispatch(&mut s, vec![("comment.add", json!({"x":0,"y":0,"text":"hi"}))], true);
+    assert!(reply[1].is_ok() && done.is_ok(), "{reply:?}");
+    let c = reply[1].as_ref().unwrap()["id"].clone();
+    let (reply, _) = f.dispatch(&mut s, vec![("comment.reply", json!({"id":c,"text":"me too","author":"Sam"}))], true);
+    assert!(reply[1].is_err());
+}
+
+/// Serves worker requests until `done` holds (or two seconds pass).
+fn serve_until(f: &Fixture, s: &mut Session, done: impl Fn() -> bool) {
+    let until = Instant::now() + Duration::from_secs(2);
+    while !done() && Instant::now() < until {
+        f.rt.serve(s);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    f.rt.serve(s);
+}
+
+#[test]
+fn document_changed_follows_content_not_selection_view_or_rollback_and_wakes_the_ui() {
+    let mut f = Fixture::new();
+    let events: Permission = serde_json::from_value(json!("app.events")).unwrap();
+    f.state.apps.get_mut(&f.rt.app).unwrap().get_mut(&f.owner.plugin).unwrap().grants.insert(events.clone());
+    f.save();
+    let declared: Vec<Permission> = f.owner.declared.iter().cloned().chain([events]).collect();
+    lock(&f.rt.state).contributions[0].declared = declared.into();
+    lock(&f.rt.state).generation = Store::at(&f.rt.root).state().map(|s| s.generation).ok();
+    let woken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let w = woken.clone();
+    f.rt.set_waker(Arc::new(move || { w.fetch_add(1, Ordering::Relaxed); }));
+    // The handler selects and scrolls (both allowed in a read-only notification).
+    let (seen, worker) = recording_worker(&f, |e| if e["name"] == "document.changed" {
+        vec![("selection.set".into(), json!({"ids":[]})), ("viewport.set".into(), json!({"zoom":2.0}))]
+    } else { vec![] });
+    let names = |seen: &Arc<Mutex<Vec<Value>>>| lock(seen).iter().filter_map(|e| e["name"].as_str().map(str::to_string)).collect::<Vec<_>>();
+    let mut s = Session::new();
+    let id = s.execute("node.create", &json!({"type":"rectangle","width":20,"height":20})).unwrap()["id"].clone();
+    f.rt.pump(&mut s);
+    serve_until(&f, &mut s, || woken.load(Ordering::Relaxed) > 0 && !names(&seen).is_empty() && lock(&f.rt.deferred).is_empty());
+    assert!(woken.load(Ordering::Relaxed) > 0, "a queued worker request wakes the UI");
+    assert!(!f.rt.wants_pump(&s), "nothing left to deliver");
+    lock(&seen).clear();
+    // Selection and view changes are not content changes.
+    s.execute("select.set", &json!({"ids":[id]})).unwrap();
+    s.execute("view.set", &json!({"zoom":3.0})).unwrap();
+    assert!(f.rt.wants_pump(&s), "the selection changed since the last pump");
+    f.rt.pump(&mut s);
+    serve_until(&f, &mut s, || !names(&seen).is_empty());
+    assert_eq!(names(&seen), ["selection.changed"]);
+    // A rolled-back event leaves the content as it was: no notification.
+    lock(&seen).clear();
+    let _ = f.dispatch(&mut s, vec![("node.create", json!({"type":"rectangle"}))], false);
+    f.rt.pump(&mut s);
+    serve_until(&f, &mut s, || false);
+    assert!(names(&seen).is_empty(), "{:?}", names(&seen));
+    // A content change notifies once; the handler's selection and scroll do not re-trigger it.
+    s.execute("select.set", &json!({"ids":[]})).unwrap();
+    f.rt.pump(&mut s);
+    serve_until(&f, &mut s, || false);
+    lock(&seen).clear();
+    s.execute("node.set", &json!({"ids":[id],"props":{"name":"Renamed"}})).unwrap();
+    for _ in 0..4 { f.rt.pump(&mut s); serve_until(&f, &mut s, || false); }
+    assert_eq!(names(&seen), ["document.changed"]);
+    lock(&f.rt.state).workers.clear();
+    worker.join().unwrap();
 }

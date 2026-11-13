@@ -13,12 +13,16 @@ fn key(i: &Invocation) -> usize { Arc::as_ptr(&i.cancel) as usize }
 struct Dispatch { read_only: bool, uid: u64, hash: Option<String>, surface: Option<(String,u64)>, completion: Arc<Mutex<Option<Result<(),String>>>> }
 enum Kind { Begin, Call(String,Value), Finish(bool) }
 struct Request { inv: Invocation, context: Dispatch, kind: Kind, reply: mpsc::Sender<Result<Value,OpError>> }
-struct Bridge { contract: craft_ext_host::api::AppContract, tx: mpsc::SyncSender<Request>, context: Arc<Mutex<Option<Dispatch>>> }
+/// Called (from a worker thread) when a request for the document thread is queued, so an idle UI
+/// wakes to serve it instead of waiting for the next input.
+pub type Waker = Arc<dyn Fn() + Send + Sync>;
+struct Bridge { contract: craft_ext_host::api::AppContract, tx: mpsc::SyncSender<Request>, context: Arc<Mutex<Option<Dispatch>>>, waker: Arc<Mutex<Option<Waker>>> }
 impl Bridge {
     fn ask(&self, inv: &Invocation, kind: Kind) -> Result<Value,OpError> {
         let (tx,rx)=mpsc::channel();
         let context=lock(&self.context).clone().ok_or_else(|| err("no event context"))?;
         self.tx.try_send(Request { inv: inv.clone(), context, kind, reply: tx }).map_err(|_| err("document queue full"))?;
+        if let Some(wake) = lock(&self.waker).clone() { wake(); }
         rx.recv_timeout(Duration::from_secs(7)).unwrap_or_else(|_| { inv.cancel.store(true,Ordering::Relaxed); Err(OpError::new(Code::Cancelled,"document request timed out")) })
     }
 }
@@ -35,8 +39,8 @@ struct Contribution { plugin: ExtensionId, version: Version, name: String, id: S
 struct Surface { view: PluginSurface, owner: Contribution }
 struct Gesture { mark: GroupMark, uid: u64, owner: Contribution, generation: u64 }
 #[derive(Default)]
-struct State { form_metadata: BTreeMap<String,Value>, form_flags: BTreeMap<String,Value>, contributions: Vec<Contribution>, workers: BTreeMap<String,mpsc::SyncSender<Job>>, surfaces: BTreeMap<String,Surface>, overlays: BTreeMap<String,Value>, selected_tool: Option<Contribution>, gesture: Option<Gesture>, generation: Option<u64>, seen: Option<(u64,Value,u64,u64)>, prompt: Option<Vec<(PluginRef,Status)>>, failures: BTreeMap<ExtensionId,u32>, last_failure: BTreeMap<ExtensionId,String>, programs: BTreeMap<String,Program> }
-pub struct Runtime { root: PathBuf, app: AppId, grants: Arc<LiveGrants>, contract: craft_ext_host::api::AppContract, state: Mutex<State>, rx: Mutex<mpsc::Receiver<Request>>, tx: mpsc::SyncSender<Request>, deferred: Mutex<VecDeque<Request>>, interactive: AtomicBool }
+struct State { form_metadata: BTreeMap<String,Value>, form_flags: BTreeMap<String,Value>, contributions: Vec<Contribution>, workers: BTreeMap<String,mpsc::SyncSender<Job>>, surfaces: BTreeMap<String,Surface>, overlays: BTreeMap<String,Value>, selected_tool: Option<Contribution>, gesture: Option<Gesture>, generation: Option<u64>, seen: Option<(u64,Value,u64,Arc<figcraft_doc::Document>)>, prompt: Option<Vec<(PluginRef,Status)>>, failures: BTreeMap<ExtensionId,u32>, last_failure: BTreeMap<ExtensionId,String>, programs: BTreeMap<String,Program> }
+pub struct Runtime { root: PathBuf, app: AppId, grants: Arc<LiveGrants>, contract: craft_ext_host::api::AppContract, state: Mutex<State>, rx: Mutex<mpsc::Receiver<Request>>, tx: mpsc::SyncSender<Request>, deferred: Mutex<VecDeque<Request>>, interactive: AtomicBool, waker: Arc<Mutex<Option<Waker>>> }
 pub fn manager() -> Result<Manager,String> {
     let root=craft_ext_store::location::root_for(craft_ext_store::location::Os::current(),|k|std::env::var(k).ok()).map_err(|e|e.to_string())?;
     let c=contract().map_err(|e|e.to_string())?;
@@ -61,8 +65,10 @@ impl Runtime {
         let c=contract().map_err(|e|e.to_string())?;
         let grants=LiveGrants { root:root.clone(), app:c.app.clone() };
         let (tx,rx)=mpsc::sync_channel(64);
-        Ok(Arc::new(Self { root, app:c.app.clone(), grants:Arc::new(grants), contract:c, state:Mutex::new(State::default()), rx:Mutex::new(rx), tx, deferred:Mutex::new(VecDeque::new()), interactive:AtomicBool::new(false) }))
+        Ok(Arc::new(Self { root, app:c.app.clone(), grants:Arc::new(grants), contract:c, state:Mutex::new(State::default()), rx:Mutex::new(rx), tx, deferred:Mutex::new(VecDeque::new()), interactive:AtomicBool::new(false), waker:Arc::default() }))
     }
+    /// Sets what wakes the app's UI when a worker queues document work (see [`Waker`]).
+    pub fn set_waker(&self,wake:Waker) { *lock(&self.waker)=Some(wake); }
     pub fn manager(&self)->Manager { Manager::new(Store::at(&self.root),Some(self.app.clone()),self.contract.provided.clone(),craft_ext_host::native::platform()) }
     pub fn take_project_prompt(&self)->Option<Vec<(PluginRef,Status)>> { lock(&self.state).prompt.take() }
     fn load(&self,s:&mut Session)->Result<(),String> {
@@ -102,7 +108,7 @@ impl Runtime {
     }
     fn spawn(&self,program:Program)->Result<mpsc::SyncSender<Job>,String> {
         let (tx,rx)=mpsc::sync_channel::<Job>(64); let context=Arc::new(Mutex::new(None));
-        let api=Arc::new(Bridge { contract:contract().map_err(|e|e.to_string())?,tx:self.tx.clone(),context:context.clone() });
+        let api=Arc::new(Bridge { contract:contract().map_err(|e|e.to_string())?,tx:self.tx.clone(),context:context.clone(),waker:self.waker.clone() });
         let grants=self.grants.clone();
         std::thread::Builder::new().name("figcraft-plugin".into()).spawn(move || {
             let log:craft_ext_host::wasm::LogFn=Arc::new(|id,_,text|log::info!("plugin {id}: {}",text.chars().take(1000).collect::<String>()));
@@ -196,7 +202,9 @@ impl Runtime {
         if s.ds().is_err() && !op.starts_with("ui.") && op!="canvas.overlay.set" { return Err(err("no document")); }
         if crate::contract::EDIT_COMMANDS.contains(&op) || crate::contract::QUERY_COMMANDS.contains(&op) {
             validate_args(&a, 0)?;
-            if matches!(op, "image.replace" | "image.place") && (a.get("path").is_some() || a.get("data").and_then(Value::as_str).is_none()) { return Err(err("image.replace requires inline data; paths are forbidden")); }
+            if matches!(op, "image.replace" | "image.place") && (a.get("path").is_some() || a.get("data").and_then(Value::as_str).is_none()) { return Err(err(format!("{op} requires inline data; paths are forbidden"))); }
+            // Comments are written as the person using the app; a plugin cannot sign as anyone else.
+            if matches!(op, "comment.add" | "comment.reply") && a.get("author").is_some() { return Err(err(format!("{op} cannot set author"))); }
             let rt = s.plugins.take();
             let out = s.execute(op, &a).map_err(err);
             s.plugins = rt;
@@ -311,10 +319,19 @@ fn overlay_numbers(v: &Value) -> bool {
 fn validate_args(a: &Value, depth: usize) -> Result<(), OpError> {
     if depth == 0 && serde_json::to_vec(a).map_err(err)?.len() > 256 * 1024 { return Err(err("argument budget exceeded")); }
     if depth > 32 { return Err(err("arguments too deep")); }
+    validate_arg_value(a, depth, false)
+}
+fn validate_arg_value(a: &Value, depth: usize, identifier: bool) -> Result<(), OpError> {
+    if depth > 32 { return Err(err("arguments too deep")); }
     match a {
-        Value::Array(v) => { if v.len() > 4096 { return Err(err("array too large")); } for x in v { validate_args(x, depth+1)?; } }
-        Value::Object(v) => { for x in v.values() { validate_args(x, depth+1)?; } }
-        Value::Number(n) if n.as_f64().is_none_or(|v| !v.is_finite() || v.abs() > 1e8) => return Err(err("number out of range")),
+        Value::Array(v) => { if v.len() > 4096 { return Err(err("array too large")); } for x in v { validate_arg_value(x, depth+1, identifier)?; } }
+        Value::Object(v) => { for (key, x) in v {
+            let id = matches!(key.as_str(), "id" | "ids" | "parent" | "page" | "component" | "style" | "variable" | "collection" | "mode" | "target" | "source");
+            validate_arg_value(x, depth+1, id)?;
+        } }
+        // Layer ids are unsigned integers past 2^32 in a live session (client id << 32 | counter):
+        // only explicitly named identifier fields may exceed the coordinate bound.
+        Value::Number(n) if !(identifier && n.is_u64()) && n.as_f64().is_none_or(|v| !v.is_finite() || v.abs() > 1e8) => return Err(err("number out of range")),
         _ => {}
     }
     Ok(())
@@ -341,7 +358,7 @@ impl PluginRuntime for Runtime {
         let cancel={let st=lock(&self.state); st.gesture.as_ref().is_some_and(|g|s.ds().map_or(true,|d|d.uid!=g.uid) || self.grants.stopped(&g.owner.plugin,g.owner.version) || self.grants.generation(&g.owner.plugin)!=g.generation)};
         if cancel {self.tool_event(s,"cancel",[0.,0.],Value::Null);}
         for _ in 0..64 { if lock(&self.deferred).is_empty() && lock(&self.rx).try_recv().map(|r|lock(&self.deferred).push_back(r)).is_err() {break;} self.serve(s); }
-        let Ok(d)=s.ds() else {lock(&self.state).seen=None;return}; let now=(d.uid,json!(d.selection),d.page.0,d.revision);
+        let Ok(d)=s.ds() else {lock(&self.state).seen=None;return}; let now=(d.uid,json!(d.selection),d.page.0,d.doc.clone());
         let previous=lock(&self.state).seen.replace(now.clone());
         let mut events=Vec::new();
         if previous.as_ref().is_none_or(|p|p.0!=now.0) {
@@ -352,9 +369,20 @@ impl PluginRuntime for Runtime {
         }
         if previous.as_ref().is_none_or(|p|p.1!=now.1) {events.push("selection.changed");}
         if previous.as_ref().is_none_or(|p|p.2!=now.2 || p.0!=now.0) {events.push("page.changed");}
-        if previous.as_ref().is_some_and(|p|p.0==now.0 && p.3!=now.3) {events.push("document.changed");}
+        // The content itself, not `revision` (which selection, the view and rollbacks bump too):
+        // otherwise a read-only handler that selects, scrolls or fails would re-trigger itself.
+        if previous.as_ref().is_some_and(|p|p.0==now.0 && !Arc::ptr_eq(&p.3,&now.3)) {events.push("document.changed");}
         let cs=lock(&self.state).contributions.clone();
         if !self.busy() { for c in cs {if c.declared.iter().any(|p|*p==Permission::AppEvents) && self.grants.allowed(&c.plugin,&Permission::AppEvents) {for event in &events {let _=self.deliver(s,&c,json!({"event":"app","type":event,"name":event}),false);}}} }
+    }
+    fn wants_pump(&self,s:&Session)->bool {
+        if !lock(&self.deferred).is_empty() { return true; }
+        let st=lock(&self.state);
+        if st.contributions.is_empty() { return false; }
+        match (s.ds().ok(),&st.seen) {
+            (Some(d),Some(p))=> p.0!=d.uid || p.1!=json!(d.selection) || p.2!=d.page.0 || !Arc::ptr_eq(&p.3,&d.doc),
+            (d,p)=> d.is_some()!=p.is_some(),
+        }
     }
     fn surfaces(&self)->Vec<PluginSurface> {lock(&self.state).surfaces.values().map(|s|s.view.clone()).collect()}
     fn set_open(&self,k:&str,o:bool) {if let Some(s)=lock(&self.state).surfaces.get_mut(k) {s.view.open=o;}}

@@ -39,6 +39,8 @@ struct State {
     /// Plugins whose Resume was clicked in the Plugins window this frame.
     resume: Vec<String>,
     renderer: PluginUi,
+    /// The plugin runtime wakes this UI when a worker queues document work.
+    waker_set: bool,
 }
 
 thread_local! {
@@ -65,6 +67,13 @@ pub fn open_manager() {
 pub fn frame(app: &mut FigApp, ctx: &egui::Context) {
     let choice = if app.session.prefs.opaque.get("plugin_ui_engine").and_then(Value::as_str) == Some("framework") { EngineChoice::Framework } else { EngineChoice::Egui };
     STATE.with(|st| { let mut st = st.borrow_mut(); if st.renderer.choice() != choice { st.renderer = PluginUi::new(choice); } });
+    // Plugin work arrives from worker threads: they wake the UI rather than it polling them.
+    if let Some(r) = figcraft_plugins::runtime()
+        && !STATE.with(|st| std::mem::replace(&mut st.borrow_mut().waker_set, true))
+    {
+        let ctx = ctx.clone();
+        r.set_waker(Arc::new(move || ctx.request_repaint()));
+    }
     app.session.pump_plugins();
     // Docked panels: new ones get a place, and each panel's open flag follows the saved layout.
     crate::plugin_dock::sync(app);
@@ -162,6 +171,11 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     }
     if let Some(m) = app.session.message.take() {
         app.toast(m);
+    }
+    // This frame changed the selection, page or document (or left requests queued): the next
+    // frame's pump delivers that to plugins, so ask for it now rather than wait for input.
+    if rt.wants_pump(&app.session) {
+        ctx.request_repaint();
     }
 }
 
