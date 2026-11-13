@@ -499,7 +499,8 @@ fn recording_worker(f: &Fixture, calls: impl Fn(&Value) -> Vec<(String, Value)> 
             for kind in kinds {
                 let _ = bridge.ask(&job.inv, kind);
             }
-            job.done.send(Ok(())).unwrap();
+            // Notifications are delivered without waiting, so their receiver may be gone.
+            let _ = job.done.send(Ok(()));
         }
     });
     (seen, handle)
