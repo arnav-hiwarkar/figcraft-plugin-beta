@@ -627,6 +627,8 @@ fn export_returns_svg_without_files_and_new_operations_obey_revocation() {
 fn skipped_plugins_do_nothing_for_that_document_only() {
     let f = Fixture::new();
     let mut s = Session::new();
+    // As the other runtime tests: the store is current, so pumping does not reload the fixture.
+    lock(&f.rt.state).generation = Store::at(&f.rt.root).state().map(|s| s.app_fingerprint(&f.rt.app)).ok();
     f.rt.pump(&mut s);
     let (seen, worker) = recording_worker(&f, |_| vec![]);
     f.rt.suppress_for_document([f.owner.plugin.clone()]);
@@ -636,7 +638,7 @@ fn skipped_plugins_do_nothing_for_that_document_only() {
     // Another document is unaffected.
     s.execute("file.new", &json!({})).unwrap();
     f.rt.pump(&mut s);
-    assert!(f.rt.deliver(&mut s, &f.owner, json!({"event":"command","id":"x"}), true).is_ok());
+    f.rt.deliver(&mut s, &f.owner, json!({"event":"command","id":"x"}), true).unwrap();
     lock(&f.rt.state).workers.clear();
     worker.join().unwrap();
 }
@@ -648,6 +650,7 @@ fn the_project_prompt_is_raised_once_per_document() {
     let missing: PluginRef = serde_json::from_value(json!({"id":"io.github.tests.missing","version":"1.0.0","source":"catalogue"})).unwrap();
     s.doc_mut().unwrap().plugins.push(missing);
     let uid = s.ds().unwrap().uid;
+    lock(&f.rt.state).generation = Store::at(&f.rt.root).state().map(|s| s.app_fingerprint(&f.rt.app)).ok();
     f.rt.pump(&mut s);
     assert!(f.rt.take_project_prompt().is_some(), "a missing plugin is reported");
     assert!(lock(&f.rt.state).prompted.contains(&uid));
