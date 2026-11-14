@@ -30,6 +30,8 @@ struct State {
     manager_error: Option<String>,
     manager_open: bool,
     prompt: Option<ProjectPrompt>,
+    /// The plugins the open project prompt lists as not ready (what "Open without them" skips).
+    prompt_plugins: Vec<craft_ext_core::id::ExtensionId>,
     refreshed: Option<Instant>,
     /// The last pointer position sent during a tool gesture (page units), so a still pointer
     /// sends no updates.
@@ -90,7 +92,11 @@ pub fn frame(app: &mut FigApp, ctx: &egui::Context) {
         st.prompt.is_none()
     });
     if prompt && let Some(statuses) = figcraft_plugins::runtime().and_then(|r| r.take_project_prompt()) {
-        STATE.with(|st| st.borrow_mut().prompt = Some(ProjectPrompt::new(statuses)));
+        STATE.with(|st| {
+            let mut st = st.borrow_mut();
+            st.prompt_plugins = statuses.iter().filter(|(_, s)| !s.ready()).map(|(r, _)| r.id.clone()).collect();
+            st.prompt = Some(ProjectPrompt::new(statuses));
+        });
     }
     // Escape ends a plugin tool (cancelling and rolling back an open gesture) before any shortcut
     // sees it.
@@ -113,9 +119,15 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         if st.prompt.is_some()
             && let Some(m) = manager(&mut st)
             && let Some(p) = st.prompt.as_mut()
-            && p.show(ctx, &m).is_some()
+            && let Some(outcome) = p.show(ctx, &m)
         {
+            // Skip / Open without: those plugins do nothing for this document.
+            let ids = if outcome.open_without { std::mem::take(&mut st.prompt_plugins) } else { outcome.skipped };
+            if let Some(rt) = figcraft_plugins::runtime() {
+                rt.suppress_for_document(ids);
+            }
             st.prompt = None;
+            st.prompt_plugins.clear();
         }
         if st.manager_open {
             let mut open = true;

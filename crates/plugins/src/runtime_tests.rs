@@ -26,6 +26,7 @@ impl Fixture {
             kind: ContributionKind::Command,
             declared: permissions.clone().into(),
             worker: "test".into(),
+            ui_level: craft_ext_core::ui::tree::UI_LEVEL,
             reference: PluginRef {
                 id: id.clone(),
                 version,
@@ -623,6 +624,40 @@ fn export_returns_svg_without_files_and_new_operations_obey_revocation() {
 }
 
 #[test]
+fn skipped_plugins_do_nothing_for_that_document_only() {
+    let f = Fixture::new();
+    let mut s = Session::new();
+    f.rt.pump(&mut s);
+    let (seen, worker) = recording_worker(&f, |_| vec![]);
+    f.rt.suppress_for_document([f.owner.plugin.clone()]);
+    let refused = f.rt.deliver(&mut s, &f.owner, json!({"event":"command","id":"x"}), true).unwrap_err();
+    assert!(refused.contains("skipped"), "{refused}");
+    assert!(lock(&seen).is_empty(), "the worker never saw the event");
+    // Another document is unaffected.
+    s.execute("file.new", &json!({})).unwrap();
+    f.rt.pump(&mut s);
+    assert!(f.rt.deliver(&mut s, &f.owner, json!({"event":"command","id":"x"}), true).is_ok());
+    lock(&f.rt.state).workers.clear();
+    worker.join().unwrap();
+}
+
+#[test]
+fn the_project_prompt_is_raised_once_per_document() {
+    let f = Fixture::new();
+    let mut s = Session::new();
+    let missing: PluginRef = serde_json::from_value(json!({"id":"io.github.tests.missing","version":"1.0.0","source":"catalogue"})).unwrap();
+    s.doc_mut().unwrap().plugins.push(missing);
+    let uid = s.ds().unwrap().uid;
+    f.rt.pump(&mut s);
+    assert!(f.rt.take_project_prompt().is_some(), "a missing plugin is reported");
+    assert!(lock(&f.rt.state).prompted.contains(&uid));
+    // Switching away and back (the document becomes active again) must not ask again.
+    lock(&f.rt.state).seen = None;
+    f.rt.pump(&mut s);
+    assert!(f.rt.take_project_prompt().is_none());
+}
+
+#[test]
 fn document_changed_notifications_cannot_create_an_edit_feedback_loop() {
     let f = Fixture::new(); let mut s = Session::new();
     let before = s.doc().unwrap().nodes().count();
@@ -730,4 +765,21 @@ fn document_changed_follows_content_not_selection_view_or_rollback_and_wakes_the
     assert_eq!(names(&seen), ["document.changed"]);
     lock(&f.rt.state).workers.clear();
     worker.join().unwrap();
+}
+
+#[test]
+fn project_references_follow_the_loaded_release_and_name_only_used_contributions() {
+    let r = |v: &str, state: u32| -> PluginRef {
+        serde_json::from_value(json!({"id":"io.github.a.b","version":v,"source":"catalogue","contributions":["apply","panel"],"state_versions":{"apply":state,"panel":state}})).unwrap()
+    };
+    // First edit: only the contribution that edited is recorded.
+    let first = updated_reference(None, &r("1.0.0", 1), "apply").unwrap();
+    assert_eq!(first.contributions, ["apply"]);
+    assert_eq!(first.state_versions.as_ref().unwrap().len(), 1);
+    // Same release, same contribution: nothing to change.
+    assert!(updated_reference(Some(&first), &r("1.0.0", 1), "apply").is_none());
+    // An update that reads the same state moves the reference to the new release.
+    assert_eq!(updated_reference(Some(&first), &r("1.1.0", 1), "apply").unwrap().version.to_string(), "1.1.0");
+    // A state schema change keeps the recorded release.
+    assert!(updated_reference(Some(&first), &r("2.0.0", 2), "apply").is_none());
 }

@@ -35,11 +35,12 @@ impl AppApi for Bridge {
 }
 struct Job { inv: Invocation, context: Dispatch, event: Value, done: mpsc::Sender<Result<(),String>> }
 #[derive(Clone)]
-struct Contribution { plugin: ExtensionId, version: Version, name: String, id: String, label: String, kind: ContributionKind, declared: Arc<[Permission]>, worker: String, reference: PluginRef }
+/// `ui_level`: the UI level the contribution's session contract declares (newer trees are refused).
+struct Contribution { plugin: ExtensionId, version: Version, name: String, id: String, label: String, kind: ContributionKind, declared: Arc<[Permission]>, worker: String, reference: PluginRef, ui_level: craft_ext_core::contract::Level }
 struct Surface { view: PluginSurface, owner: Contribution }
 struct Gesture { mark: GroupMark, uid: u64, owner: Contribution, generation: u64 }
 #[derive(Default)]
-struct State { form_metadata: BTreeMap<String,Value>, form_flags: BTreeMap<String,Value>, contributions: Vec<Contribution>, workers: BTreeMap<String,mpsc::SyncSender<Job>>, surfaces: BTreeMap<String,Surface>, overlays: BTreeMap<String,Value>, selected_tool: Option<Contribution>, gesture: Option<Gesture>, generation: Option<u64>, seen: Option<(u64,Value,u64,Arc<figcraft_doc::Document>)>, prompt: Option<Vec<(PluginRef,Status)>>, failures: BTreeMap<ExtensionId,u32>, last_failure: BTreeMap<ExtensionId,String>, programs: BTreeMap<String,Program> }
+struct State { form_metadata: BTreeMap<String,Value>, form_flags: BTreeMap<String,Value>, contributions: Vec<Contribution>, workers: BTreeMap<String,mpsc::SyncSender<Job>>, surfaces: BTreeMap<String,Surface>, overlays: BTreeMap<String,Value>, selected_tool: Option<Contribution>, gesture: Option<Gesture>, generation: Option<u64>, seen: Option<(u64,Value,u64,Arc<figcraft_doc::Document>)>, prompt: Option<Vec<(PluginRef,Status)>>, prompted: std::collections::BTreeSet<u64>, suppressed: Option<(u64,std::collections::BTreeSet<ExtensionId>)>, failures: BTreeMap<ExtensionId,u32>, last_failure: BTreeMap<ExtensionId,String>, programs: BTreeMap<String,Program> }
 pub struct Runtime { root: PathBuf, app: AppId, grants: Arc<LiveGrants>, contract: craft_ext_host::api::AppContract, state: Mutex<State>, rx: Mutex<mpsc::Receiver<Request>>, tx: mpsc::SyncSender<Request>, deferred: Mutex<VecDeque<Request>>, interactive: AtomicBool, waker: Arc<Mutex<Option<Waker>>> }
 pub fn manager() -> Result<Manager,String> {
     let root=craft_ext_store::location::root_for(craft_ext_store::location::Os::current(),|k|std::env::var(k).ok()).map_err(|e|e.to_string())?;
@@ -48,6 +49,24 @@ pub fn manager() -> Result<Manager,String> {
 }
 static RUNTIME: std::sync::OnceLock<Arc<Runtime>> = std::sync::OnceLock::new();
 /// The runtime [`activate`] started in this process, if any.
+/// The project reference after `contribution` of the loaded release edited the document. It names
+/// only the contributions that edited this document, and moves to the loaded release when the
+/// saved-state versions agree; on a state schema change it keeps the recorded release (`None`:
+/// leave it), so reopening reports the mismatch.
+fn updated_reference(existing:Option<&PluginRef>,current:&PluginRef,contribution:&str)->Option<PluginRef> {
+    let mut used:Vec<String>=existing.map(|e|e.contributions.clone()).unwrap_or_default();
+    if !used.iter().any(|c|c==contribution) { used.push(contribution.to_string()); }
+    used.sort();
+    if let Some(e)=existing {
+        let state=|r:&PluginRef,c:&str|r.state_versions.as_ref().and_then(|m|m.get(c).copied());
+        if !e.contributions.iter().all(|c|state(e,c).is_none_or(|v|state(current,c)==Some(v))) { return None; }
+        if e.version==current.version && e.sha256==current.sha256 && e.contributions==used { return None; }
+    }
+    let mut r=current.clone();
+    r.state_versions=current.state_versions.as_ref().map(|m|m.iter().filter(|(c,_)|used.contains(c)).map(|(c,v)|(c.clone(),*v)).collect());
+    r.contributions=used;
+    Some(r)
+}
 pub fn runtime() -> Option<Arc<Runtime>> { RUNTIME.get().cloned() }
 /// Starts plugins for the app's session: loads enabled contributions (not in safe mode) and attaches
 /// the runtime. Call once, after startup files are open.
@@ -71,6 +90,19 @@ impl Runtime {
     pub fn set_waker(&self,wake:Waker) { *lock(&self.waker)=Some(wake); }
     pub fn manager(&self)->Manager { Manager::new(Store::at(&self.root),Some(self.app.clone()),self.contract.provided.clone(),craft_ext_host::native::platform()) }
     pub fn take_project_prompt(&self)->Option<Vec<(PluginRef,Status)>> { lock(&self.state).prompt.take() }
+    /// The user chose Skip / Open without in the project prompt: these plugins do nothing for the
+    /// current document (their events are refused and their panels hidden) until another
+    /// document is active. Other documents are unaffected.
+    pub fn suppress_for_document(&self,ids:impl IntoIterator<Item=ExtensionId>) {
+        let mut st=lock(&self.state);
+        let Some(uid)=st.seen.as_ref().map(|seen|seen.0) else { return };
+        let ids:std::collections::BTreeSet<ExtensionId>=ids.into_iter().collect();
+        if ids.is_empty() { return; }
+        let same=st.suppressed.as_ref().is_some_and(|(u,_)|*u==uid);
+        if same { if let Some((_,set))=st.suppressed.as_mut() { set.extend(ids); } } else { st.suppressed=Some((uid,ids)); }
+        // A gesture of a skipped plugin is cancelled (and rolled back) by the next pump.
+    }
+    fn suppressed_here(&self,uid:u64,plugin:&ExtensionId)->bool { lock(&self.state).suppressed.as_ref().is_some_and(|(u,set)|*u==uid && set.contains(plugin)) }
     fn load(&self,s:&mut Session)->Result<(),String> {
         let store=Store::at(&self.root); let saved=store.state().map_err(|e|e.to_string())?;
         let releases=GrantView::open(&self.root,self.app.clone()).and_then(|v|v.enabled_contributions(&self.app)).map_err(|e|e.to_string())?;
@@ -95,7 +127,7 @@ impl Runtime {
                     };
                     let tx=self.spawn(code.clone())?; let mut st=lock(&self.state); st.workers.insert(worker.clone(),tx); st.programs.insert(worker.clone(),code);
                 }
-                let owner=Contribution { plugin:id.clone(),version,name:manifest.name.clone(),id:c.id.clone(),label:c.label.clone(),kind:c.kind.clone(),declared:c.permissions.iter().chain(&c.optional_permissions).cloned().collect::<Vec<_>>().into(),worker,reference:PluginRef { id:id.clone(),version,sha256:hash.clone(),source,name:manifest.name.clone(),contributions:enabled.iter().cloned().collect(),state_versions:Some(manifest.contributions_for(&self.app).filter(|c|enabled.contains(&c.id)).map(|c|(c.id.clone(),c.state_version)).collect()) } };
+                let owner=Contribution { plugin:id.clone(),version,name:manifest.name.clone(),id:c.id.clone(),label:c.label.clone(),kind:c.kind.clone(),declared:c.permissions.iter().chain(&c.optional_permissions).cloned().collect::<Vec<_>>().into(),worker,ui_level:craft_ext_core::ui::tree::ui_level_for_session(c.contract.level),reference:PluginRef { id:id.clone(),version,sha256:hash.clone(),source,name:manifest.name.clone(),contributions:enabled.iter().cloned().collect(),state_versions:Some(manifest.contributions_for(&self.app).filter(|c|enabled.contains(&c.id)).map(|c|(c.id.clone(),c.state_version)).collect()) } };
                 let mut st=lock(&self.state);
                 if c.kind==ContributionKind::Panel { st.surfaces.insert(format!("{id}/{}",c.id),Surface { view:PluginSurface { key:format!("{id}/{}",c.id),title:c.label.clone(),tree:None,rev:0,window:false,open:false },owner:owner.clone() }); }
                 st.contributions.push(owner);
@@ -130,6 +162,7 @@ impl Runtime {
     fn deliver(&self,s:&mut Session,c:&Contribution,event:Value,wait:bool)->Result<(),String> {
         // UID zero is a document-independent init context; document operations report no document.
         let uid=s.ds().map_or(0,|d|d.uid); let inv=self.invocation(c);
+        if self.suppressed_here(uid,&c.plugin) { return Err(format!("{} is skipped for this document (project prompt)",c.name)); }
         let init=event["event"]=="init";
         let completion=Arc::new(Mutex::new(None));
         if lock(&self.state).failures.get(&c.plugin).copied().unwrap_or(0)>=PAUSE_AFTER { return Err("plugin paused after three failures (Plugins ▸ Manage plugins… ▸ Resume)".into()); }
@@ -184,8 +217,9 @@ impl Runtime {
                     if commit && before.as_ref().is_some_and(|before|s.ds().is_ok_and(|d|!Arc::ptr_eq(before,&d.doc))) {
                         let reference=lock(&self.state).contributions.iter().find(|c|c.plugin==begin.inv.plugin && c.id==begin.inv.contribution).map(|c|c.reference.clone());
                         if let Some(reference)=reference {
-                            if s.doc().is_ok_and(|d|!d.plugins.iter().any(|p|p.id==reference.id)) {
-                                if let Ok(d)=s.doc_mut() { d.plugins.push(reference); }
+                            let existing=s.doc().ok().and_then(|d|d.plugins.iter().find(|p|p.id==reference.id).cloned());
+                            if let Some(updated)=updated_reference(existing.as_ref(),&reference,&begin.inv.contribution) {
+                                if let Ok(d)=s.doc_mut() { d.plugins.retain(|p|p.id!=updated.id); d.plugins.push(updated); }
                             }
                         }
                     }
@@ -278,7 +312,8 @@ impl Runtime {
                     if op == "ui.window.open" && a.get("title").is_none() { a["title"] = json!(sf.view.title); }
                 }
                 let tree=a.get("tree").ok_or_else(||err("tree missing"))?;
-                let n:Node=serde_json::from_value(tree.clone()).map_err(err)?; n.validate().map_err(|e|err(e.0))?;
+                let level=lock(&self.state).contributions.iter().find(|c|c.plugin==i.plugin && c.id==i.contribution).map_or(craft_ext_core::ui::tree::UI_LEVEL,|c|c.ui_level);
+                let n:Node=serde_json::from_value(tree.clone()).map_err(err)?; n.validate_at(level).map_err(|e|err(e.0))?;
                 if op=="ui.panel.set" { let panel=a["panel"].as_str().ok_or_else(||err("panel missing"))?; if !lock(&self.state).surfaces.get(&format!("{}/{panel}",i.plugin)).is_some_and(|sf|!sf.view.window) { return Err(err("undeclared panel")); } }
                 else { let id=a["id"].as_str().ok_or_else(||err("id missing"))?; if id.is_empty() || id.len()>64 || a["title"].as_str().is_none_or(|t|t.len()>200) {return Err(err("invalid window"));} }
                 if changes.len()>=64 {return Err(err("UI event budget exceeded"));}
@@ -356,14 +391,16 @@ impl PluginRuntime for Runtime {
             { let mut st=lock(&self.state); st.workers.clear(); st.contributions.clear(); st.surfaces.clear(); st.form_metadata.clear(); st.form_flags.clear(); st.overlays.clear(); st.selected_tool=None; st.failures.clear(); st.last_failure.clear(); st.programs.clear(); st.generation=None; }
             if generation.is_some() { if let Err(e)=self.load(s) {log::warn!("plugin reconciliation: {e}");} }
         }
-        let cancel={let st=lock(&self.state); st.gesture.as_ref().is_some_and(|g|s.ds().map_or(true,|d|d.uid!=g.uid) || self.grants.stopped(&g.owner.plugin,g.owner.version) || self.grants.generation(&g.owner.plugin)!=g.generation)};
+        let cancel={let st=lock(&self.state); st.gesture.as_ref().is_some_and(|g|s.ds().map_or(true,|d|d.uid!=g.uid) || self.grants.stopped(&g.owner.plugin,g.owner.version) || self.grants.generation(&g.owner.plugin)!=g.generation || st.suppressed.as_ref().is_some_and(|(u,set)|*u==g.uid && set.contains(&g.owner.plugin)))};
         if cancel {self.tool_event(s,"cancel",[0.,0.],Value::Null);}
         for _ in 0..64 { if lock(&self.deferred).is_empty() && lock(&self.rx).try_recv().map(|r|lock(&self.deferred).push_back(r)).is_err() {break;} self.serve(s); }
         let Ok(d)=s.ds() else {lock(&self.state).seen=None;return}; let now=(d.uid,json!(d.selection),d.page.0,d.doc.clone());
         let previous=lock(&self.state).seen.replace(now.clone());
         let mut events=Vec::new();
         if previous.as_ref().is_none_or(|p|p.0!=now.0) {
-            let statuses=self.manager().check_project(&d.doc.plugins).unwrap_or_default(); if statuses.iter().any(|(_,s)|!s.ready()) {lock(&self.state).prompt=Some(statuses);}
+            // Ask once per document: switching back to an open document does not ask again.
+            let first=lock(&self.state).prompted.insert(now.0);
+            let statuses=self.manager().check_project(&d.doc.plugins).unwrap_or_default(); if first && statuses.iter().any(|(_,s)|!s.ready()) {lock(&self.state).prompt=Some(statuses);}
             let cs=lock(&self.state).contributions.clone();
             for c in cs {let _=self.deliver(s,&c,json!({"event":"init"}),true);}
             events.push("document.opened");
@@ -385,7 +422,10 @@ impl PluginRuntime for Runtime {
             (d,p)=> d.is_some()!=p.is_some(),
         }
     }
-    fn surfaces(&self)->Vec<PluginSurface> {lock(&self.state).surfaces.values().map(|s|s.view.clone()).collect()}
+    fn surfaces(&self)->Vec<PluginSurface> {
+        let st=lock(&self.state); let uid=st.seen.as_ref().map(|seen|seen.0);
+        st.surfaces.values().filter(|s|!st.suppressed.as_ref().is_some_and(|(u,set)|Some(*u)==uid && set.contains(&s.owner.plugin))).map(|s|s.view.clone()).collect()
+    }
     fn set_open(&self,k:&str,o:bool) {if let Some(s)=lock(&self.state).surfaces.get_mut(k) {s.view.open=o;}}
     fn ui_event(&self,s:&mut Session,k:&str,rev:u64,w:&str,v:Value) { let c=lock(&self.state).surfaces.get(k).filter(|sf|sf.view.open && sf.view.rev==rev).map(|sf|sf.owner.clone()); if let Some(c)=c {if !self.busy() {let surface=k.strip_prefix(&format!("{}/",c.plugin)).unwrap_or(k); if let Err(e)=self.deliver(s,&c,json!({"event":"ui","surface":surface,"rev":rev,"widget":w,"value":v}),true) {s.message=Some(e);}}} }
     fn active_tool(&self)->bool {lock(&self.state).selected_tool.is_some()}
