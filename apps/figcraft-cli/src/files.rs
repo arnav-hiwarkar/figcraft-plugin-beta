@@ -468,7 +468,7 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>, plugins:
         refuse_dropping_images_from_script(input.map(|input| (input, input_images_left_out)), ds, out)?;
         if ext(out) == "figcraft" {
             // Through the engine, so the version history is kept.
-            write(out, &figcraft_engine::cmd::file::file_bytes(ds).map_err(|e| CliError::Failed(e.to_string()))?)?;
+            write(out, &figcraft_engine::cmd::file::file_bytes_at(ds, out).map_err(|e| CliError::Failed(e.to_string()))?)?;
         } else {
             write_doc(&ds.doc, ds.page, out)?;
         }
@@ -674,7 +674,7 @@ mod tests {
         )
         .unwrap();
         let out = dir.join("out.figcraft");
-        run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap()), false).unwrap();
+        assert_eq!(run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap()), false).unwrap(), ExitCode::SUCCESS);
 
         let mut s = Session::empty();
         s.execute("file.open", &json!({"path": out.to_str().unwrap()})).unwrap();
@@ -704,7 +704,7 @@ mod tests {
         )
         .unwrap();
         let out = dir.join("out.figcraft");
-        run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap()), false).unwrap();
+        assert_eq!(run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap()), false).unwrap(), ExitCode::SUCCESS);
 
         let mut s = Session::empty();
         s.execute("file.open", &json!({"path": out.to_str().unwrap()})).unwrap();
@@ -741,7 +741,7 @@ mod tests {
         .unwrap();
         let out = dir.join("out.figcraft");
         // The failure is the script's, not the call's: the CLI reports it and exits non-zero.
-        run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap()), false).unwrap();
+        assert_eq!(run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap()), false).unwrap(), ExitCode::from(1));
         assert!(!out.exists(), "a script that failed writes nothing");
         std::fs::remove_dir_all(dir).unwrap();
     }
