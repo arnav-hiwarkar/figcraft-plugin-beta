@@ -4,9 +4,6 @@ use serde_json::Value;
 
 #[derive(Clone)]
 pub struct PluginCommand { pub id: String, pub label: String, pub plugin: String, pub tool: bool }
-/// A plugin paused after repeated failures this session (never saved): its id, name and last error.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct PausedPlugin { pub id: String, pub name: String, pub reason: String }
 /// Viewport-only commands: they never touch the document, so they run while a plugin tool gesture
 /// is open (the gesture's coordinates are recomputed from the new view on the next pointer event).
 pub const NAVIGATION_COMMANDS: &[&str] = &[
@@ -31,30 +28,11 @@ pub trait PluginRuntime: Send + Sync {
     /// Whether a pump would do work now (queued plugin requests, or a document, selection, page or
     /// content change not yet delivered as app events): the UI then asks for one more frame.
     fn wants_pump(&self, _s: &Session) -> bool { false }
-    /// Plugins paused after three failures this session.
-    fn paused(&self) -> Vec<PausedPlugin> { Vec::new() }
-    /// Clears a paused plugin's failure count and starts fresh instances of its modules.
-    fn resume(&self, _s: &mut Session, _plugin: &str) -> std::result::Result<(), String> { Err("plugin is not paused".into()) }
 }
 pub struct GroupMark { docs: Vec<DocState>, active: usize, journal: Vec<(String, Value)>, pending: usize, last: Option<(String, Value)> }
 impl Session {
     pub fn pump_plugins(&mut self) { if let Some(rt) = self.plugins.clone() { rt.pump(self); } }
-    /// `plugins.paused` and `plugins.resume {id}`: session plugin state, reachable from scripts
-    /// (`figcraft-cli run --plugins`), automation and the UI. `None` for any other command.
-    pub(crate) fn plugin_session_command(&mut self, id: &str, params: &Value) -> Option<Result<Value>> {
-        let rt = self.plugins.clone();
-        match id {
-            "plugins.paused" => Some(Ok(serde_json::json!(rt.map(|rt| rt.paused()).unwrap_or_default()))),
-            "plugins.resume" => Some((|| {
-                let rt = rt.ok_or_else(|| crate::EngineError::Other("plugins are not loaded in this session".into()))?;
-                let plugin = params.get("id").and_then(Value::as_str).ok_or_else(|| crate::EngineError::Other("plugins.resume needs {\"id\": plugin id}".into()))?;
-                if rt.busy() { return Err(crate::EngineError::Other("a plugin gesture is in progress".into())); }
-                rt.resume(self, plugin).map_err(crate::EngineError::Other)?;
-                Ok(serde_json::json!({"resumed": plugin}))
-            })()),
-            _ => None,
-        }
-    }
+    pub fn in_group(&self) -> bool { self.group_depth > 0 }
     pub fn begin_group(&mut self) -> GroupMark {
         let mark = GroupMark { docs: self.docs.clone(), active: self.active, journal: std::mem::take(&mut self.journal), pending: self.pending_events.len(), last: self.last_command.clone() };
         for d in &mark.docs { self.live_hold(d.uid, true); }

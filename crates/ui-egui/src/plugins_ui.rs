@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 use craft_ext_core::ui::tree::{DrawOp, Node};
 use craft_ext_ui::plugin_ui::{PluginUi, EngineChoice, Host, Surface, Xf, paint_ops};
 use craft_ext_ui::craft_ext_manager::{Action, Config, Tab, Word};
-use figcraft_plugins::runtime::{JobInfo, JobState};
 use craft_ext_ui::{PluginManager, ProjectPrompt};
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::{Value, json};
@@ -32,8 +31,6 @@ struct State {
     last_at: Option<[f64; 2]>,
     /// The press under way began as canvas navigation (Space or middle drag, the zoom tool).
     nav_press: bool,
-    /// Plugins whose Resume was clicked in the Plugins window this frame.
-    resume: Vec<String>,
     renderer: PluginUi,
     /// The plugin runtime wakes this UI when a worker queues document work.
     waker_set: bool,
@@ -124,9 +121,10 @@ pub fn frame(app: &mut FigApp, ctx: &egui::Context) {
 }
 
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
-    let paused = app.session.plugins.as_ref().map(|rt| rt.paused()).unwrap_or_default();
     if let Some(rt) = figcraft_plugins::runtime() {
-        jobs_window(&rt, ctx);
+        let names = rt.plugin_names();
+        let name = |id: &craft_ext_core::id::ExtensionId| names.iter().find(|(p, _)| p == id).map_or_else(|| id.to_string(), |(_, n)| n.clone());
+        craft_ext_ui::jobs::jobs_window(ctx, &rt.jobs, &name, &|english| tr(english).to_string());
     }
     let mut pick_package = false;
     STATE.with(|st| {
@@ -152,27 +150,25 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     }
                 }
                 let open_problems = std::mem::take(&mut st.open_problems);
-                let mut resume = Vec::new();
                 match st.view.as_mut() {
                     Some(view) => {
                         if open_problems {
                             view.model_mut().apply(Action::SetTab(Tab::Problems));
                         }
-                        view.show_with_app_problems(ui, &words, |ui| paused_problems(ui, &paused, &mut resume));
+                        if let (Some(rt), Some(app_id)) = (figcraft_plugins::runtime(), view.model().config().scope().cloned()) {
+                            view.model_mut().set_load_problems(app_id, rt.load_problems());
+                        }
+                        view.show(ui, &words);
                         pick_package |= view.take_install_file_request();
                     }
                     None => {
                         ui.label(format!("{}: {}", tr("Plugins are unavailable"), st.manager_error.clone().unwrap_or_default()));
                     }
                 }
-                st.resume.extend(resume);
             });
             st.manager_open = open;
         }
     });
-    for id in STATE.with(|st| std::mem::take(&mut st.borrow_mut().resume)) {
-        app.run("plugins.resume", json!({"id": id}));
-    }
     if pick_package {
         app.pick_plugin_package(|_, path| {
             STATE.with(|st| {
@@ -264,81 +260,6 @@ pub fn menu(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> bool {
         return true;
     }
     false
-}
-
-fn job_status(job: &JobInfo) -> String {
-    match &job.state {
-        JobState::Running if job.note.is_empty() => tr("Working…").to_string(),
-        JobState::Running => job.note.clone(),
-        JobState::Done(_) => tr("Done").to_string(),
-        JobState::Failed(why) => format!("{}: {why}", tr("Failed")),
-        JobState::Cancelled => tr("Cancelled").to_string(),
-    }
-}
-
-fn jobs_window(rt: &figcraft_plugins::runtime::Runtime, ctx: &egui::Context) {
-    let jobs = rt.jobs.list();
-    if jobs.is_empty() {
-        return;
-    }
-    if jobs.iter().any(|j| !j.state.finished()) {
-        ctx.request_repaint_after(std::time::Duration::from_millis(100));
-    }
-    let names = rt.plugin_names();
-    egui::Window::new(tr("Plugin jobs"))
-        .id(egui::Id::unique("figcraft-plugin-jobs"))
-        .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -36.0))
-        .default_open(true)
-        .resizable(false)
-        .show(ctx, |ui| {
-            for job in &jobs {
-                let plugin = names.iter().find(|(id, _)| id == &job.plugin).map_or_else(|| job.plugin.to_string(), |(_, n)| n.clone());
-                ui.horizontal(|ui| {
-                    ui.strong(&job.label);
-                    ui.weak(plugin);
-                });
-                ui.horizontal(|ui| {
-                    if !job.state.finished() {
-                        match job.progress {
-                            Some(p) => {
-                                ui.add(egui::ProgressBar::new(p).desired_width(140.0).show_percentage());
-                            }
-                            None => {
-                                ui.spinner();
-                            }
-                        }
-                    }
-                    ui.label(job_status(job));
-                    if !job.state.finished() && job.cancellable && ui.small_button(tr("Cancel")).clicked() {
-                        rt.jobs.cancel(job.id, false);
-                    }
-                });
-            }
-            if jobs.iter().any(|j| j.state.finished()) && ui.button(tr("Clear finished")).clicked() {
-                rt.jobs.clear_finished();
-            }
-        });
-}
-
-fn paused_problems(ui: &mut Ui, paused: &[figcraft_engine::ext::PausedPlugin], resume: &mut Vec<String>) -> bool {
-    if paused.is_empty() {
-        return false;
-    }
-    ui.group(|ui| {
-        ui.label(egui::RichText::new(tr("Turned off")).strong());
-        for p in paused {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!("{} ({})", p.name, p.id));
-                if ui.button(tr("Resume")).clicked() {
-                    resume.push(p.id.clone());
-                }
-            });
-            if !p.reason.is_empty() {
-                ui.label(egui::RichText::new(p.reason.chars().take(300).collect::<String>()).small());
-            }
-        }
-    });
-    true
 }
 
 /// Preferences ▸ Plugins: opens the Plugins window.

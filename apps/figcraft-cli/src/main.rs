@@ -85,7 +85,13 @@ fn run(cli: Cli) -> CliResult<ExitCode> {
         }
         Command::Convert(a) => confined(&a.roots, || files::convert(&a.input, &a.output)),
         Command::Render(a) => confined(&a.roots, || files::render(&a.file, &a.out, a.scale.scale, a.page.as_deref())),
-        Command::Run(a) => confined(&a.roots, || files::run_script(&a.script, a.input.as_deref(), a.out.as_deref(), a.plugins)),
+        Command::Run(a) => confined(&a.roots, || {
+            let ran = files::run_script(&a.script, a.input.as_deref(), a.out.as_deref(), a.plugins);
+            if let Some(rt) = figcraft_plugins::runtime() {
+                rt.end_run();
+            }
+            ran
+        }),
         Command::Commands(a) => {
             commands(a.json, a.filter.as_deref());
             Ok(ExitCode::SUCCESS)

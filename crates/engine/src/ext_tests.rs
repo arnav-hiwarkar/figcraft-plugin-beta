@@ -1,6 +1,4 @@
-//! Plugin glue: viewport commands during a plugin gesture, the view across a rolled-back group, and
-//! the session commands for paused plugins.
-use crate::ext::{PausedPlugin, PluginCommand, PluginRuntime, PluginSurface};
+use crate::ext::{PluginCommand, PluginRuntime, PluginSurface};
 use crate::{Result, Session};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
@@ -8,7 +6,6 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 struct Fake {
     busy: Mutex<bool>,
-    resumed: Mutex<Vec<String>>,
 }
 impl PluginRuntime for Fake {
     fn commands(&self) -> Vec<PluginCommand> {
@@ -33,13 +30,6 @@ impl PluginRuntime for Fake {
     fn overlays(&self) -> Vec<Value> {
         Vec::new()
     }
-    fn paused(&self) -> Vec<PausedPlugin> {
-        vec![PausedPlugin { id: "org.example.p".into(), name: "P".into(), reason: "trap".into() }]
-    }
-    fn resume(&self, _: &mut Session, plugin: &str) -> std::result::Result<(), String> {
-        self.resumed.lock().unwrap().push(plugin.into());
-        Ok(())
-    }
 }
 
 #[test]
@@ -56,7 +46,6 @@ fn navigation_commands_run_during_a_plugin_gesture_and_edits_do_not() {
         s.execute("node.create", &json!({"type": "rectangle", "x": 0, "y": 0, "width": 10, "height": 10})).is_err(),
         "edits wait for the gesture"
     );
-    assert!(s.execute("plugins.resume", &json!({"id": "org.example.p"})).is_err(), "no resume mid-gesture");
 }
 
 #[test]
@@ -72,15 +61,3 @@ fn a_rolled_back_group_keeps_the_view_it_ended_with() {
     assert_eq!(s.ds().unwrap().view, view, "the zoom stayed");
 }
 
-#[test]
-fn paused_plugins_are_listed_and_resumed_by_command() {
-    let mut s = Session::new();
-    assert_eq!(s.execute("plugins.paused", &json!({})).unwrap(), json!([]), "no runtime: nothing paused");
-    assert!(s.execute("plugins.resume", &json!({"id": "x.y"})).is_err());
-    let rt = Arc::new(Fake::default());
-    s.plugins = Some(rt.clone());
-    assert_eq!(s.execute("plugins.paused", &json!({})).unwrap()[0]["id"], "org.example.p");
-    assert!(s.execute("plugins.resume", &json!({})).is_err(), "the id is required");
-    s.execute("plugins.resume", &json!({"id": "org.example.p"})).unwrap();
-    assert_eq!(*rt.resumed.lock().unwrap(), vec!["org.example.p".to_string()]);
-}

@@ -107,10 +107,9 @@ flock $LOCK env CARGO_BUILD_JOBS=4 cargo build -p figcraft
    document”: the Shapes panel, menu items and tool disappear on the next frame; a gesture in progress
    is cancelled with a “revoked” toast. Allow it again: they come back.
 6. Disable Shapes in the Plugins window: its docked panel disappears and the canvas widens. Enable it
-   again: the panel comes back on the same side. (Pausing needs a plugin that fails three times; the
-   Plugins window then lists it under "Problems this session" inside the manager Problems tab with **Resume**. Headless:
-   `figcraft-cli plugin resume <id>` explains that pauses last one session, and a `run --plugins` script
-   can contain `{"command":"plugins.resume","params":{"id":"<id>"}}`.)
+   again: the panel comes back on the same side. (A plugin that crashes three times in a row
+   shows as Quarantined in the manager's Problems with **Turn back on**, and stays off after a restart;
+   headless, `figcraft-cli plugin resume <id>` turns it back on.)
 7. **File ▸ Save as…** a `.figcraft`, close it, remove Shapes in the Plugins window, reopen the file:
    the project prompt lists Shapes as missing; **Open without them** opens the file with every layer intact.
 

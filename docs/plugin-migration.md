@@ -51,14 +51,12 @@ startup, after startup files open). Current implementation notes and verificatio
   the plugin saw. Viewport commands (`ext::NAVIGATION_COMMANDS`: zoom in/out/100/50/200/fit/selection,
   zoomAt, pan, view.set/get) run while a gesture is open (edits are still refused), and a rolled-back
   gesture keeps the view it ended with (`Session::finish_group`).
-- PLUGIN-FAILURE-RESET (done): the runtime records each plugin's last failure; `PluginRuntime::paused`
-  lists plugins paused after `PAUSE_AFTER` (3) failures and `resume` clears the count, replaces each of
-  the plugin's workers with a fresh instance of its stored program (in-memory state is lost) and sends
-  `init` again. Session commands `plugins.paused` and `plugins.resume {id}` reach it from the UI,
-  scripts (`figcraft-cli run --plugins`), automation and MCP. The Plugins window shows "Problems this
-  session" (name, id, last error, **Resume**) inside the shared manager Problems tab. Pauses are per session and
-  never saved; `figcraft-cli plugin resume <id>` says so and prints the script step. A store change
-  (enable, disable, grant, update) also starts plugins unpaused, as before.
+- REPEATED FAULTS (verified): `policy::Strikes` counts faults per plugin: a trap, running too long,
+  too much memory or a native helper that stopped (it restarts on the next event). Errors a plugin
+  returns, rolled-back events and document changes never count. Three in a row quarantine the release
+  with `Store::quarantine`: it stays off across restarts and shows as Quarantined in the manager's
+  Problems with **Turn back on**; `figcraft-cli plugin resume <id>` does the same. Contributions that
+  fail to load are Problems too and the rest still load.
 - CANVAS PATHS (verified): canvas-widget pointer events reach the guest as `ui` events with the
   widget id, `{kind: down|drag|up, at: [x, y]}` in the widget's own units and the tree revision they
   were drawn from; an event for an older revision or a closed panel is dropped. Fixed: a click sent only
