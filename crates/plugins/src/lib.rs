@@ -211,7 +211,10 @@ mod tests {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         assert_eq!(super::run_cli(&["contract".into()], None, &mut out, &mut err), 0);
         let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("FigCraft") && text.contains("node.create"), "{text}");
+        assert!(text.contains("FigCraft") && text.contains("node.create") && text.contains("project.data.set"), "{text}");
+        if let Some(out) = std::env::var_os("FIGCRAFT_CONTRACT_OUT") {
+            std::fs::write(out, &text).unwrap();
+        }
     }
 
     #[test]

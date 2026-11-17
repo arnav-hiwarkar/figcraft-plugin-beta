@@ -252,6 +252,9 @@ pub struct Document {
     /// Ended votes' results kept in the file, oldest first (at most [`VOTE_HISTORY_MAX`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vote_history: Vec<VoteRecord>,
+    /// Document-level plugin data, by owner key (a plugin's is `plugin:<id>`, see [`Node::plugin_data`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugin_data: BTreeMap<String, String>,
 }
 
 impl Default for Document {
@@ -295,6 +298,7 @@ impl Document {
             vote: None,
             votes: BTreeMap::new(),
             vote_history: Vec::new(),
+            plugin_data: BTreeMap::new(),
             plugins: Vec::new(),
         }
     }

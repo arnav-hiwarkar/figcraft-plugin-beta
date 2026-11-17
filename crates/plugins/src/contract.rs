@@ -62,6 +62,16 @@ pub fn contract() -> Result<AppContract, OpError> {
         ("ui.window.open", Ui, window, "ui.window", "Open or redraw a plugin window (at most four)", "{id, title, tree} | {id, patch}", "null"),
         ("ui.notify", Ui, none, "free", "Log a short message for the person", "{message}", "null"),
         ("canvas.overlay.set", Ui, none, "free", "Draw guides on the canvas in page units; cleared when a tool gesture ends", "{ops: [line|rect|circle|text draw op]}", "null"),
+        ("project.data.get", Query, read, "document.read:document", "Read one of this plugin's keys kept in the document or on a layer (`target: {node: id}` or `{layer: id}`)", "{key, target?}", "the stored JSON value, or null"),
+        (
+            "project.data.set",
+            Edit,
+            edit,
+            "document.edit:document",
+            "Keep one key of this plugin's data in the document or on a layer; saved in the .figcraft file, kept when the plugin is missing, undone with the event (null deletes)",
+            "{key, value, target?}",
+            "null",
+        ),
     ]
     .into_iter()
     .map(|(id, kind, requires, permission_rule, summary, args, result)| OpSpec { id, kind, summary, args, result, requires, permission_rule })
@@ -84,7 +94,7 @@ pub fn contract() -> Result<AppContract, OpError> {
     Ok(AppContract {
         app: AppId::new("figcraft").map_err(|e| OpError::invalid(e.to_string()))?,
         display_name: "FigCraft",
-        provided: Provided::new(&[("figcraft.session", 1, 1), ("resource.font", 1, 0), ("craft-theme", 1, 0)]),
+        provided: Provided::new(&[("figcraft.session", 1, 2), ("resource.font", 1, 0), ("craft-theme", 1, 0)]),
         ops,
         events: [
             ("init", "{}", false, "Startup, and again when a document opens; draw panels here"),

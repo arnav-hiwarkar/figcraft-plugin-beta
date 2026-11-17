@@ -165,17 +165,9 @@ impl Runtime {
         finished.into_iter().filter_map(|job|st.contributions.iter().find(|c|c.plugin==job.plugin && c.id==job.contribution).map(|c|(c.clone(),job.event()))).collect()
     }
     pub fn plugin_names(&self)->Vec<(ExtensionId,String)> { lock(&self.state).contributions.iter().map(|c|(c.plugin.clone(),c.name.clone())).collect() }
-    pub fn after_unclean_exit(&self)->Vec<String> {
-        let st=lock(&self.state);
-        st.unclean.iter().map(|id|st.contributions.iter().find(|c|&c.plugin==id).map_or_else(||id.to_string(),|c|c.name.clone())).collect()
-    }
-    pub fn answer_unclean_exit(&self,start_without:bool)->Result<(),String> {
-        let (unclean,loaded):(Vec<ExtensionId>,Vec<(ExtensionId,Version)>)={ let mut st=lock(&self.state); (std::mem::take(&mut st.unclean),st.contributions.iter().map(|c|(c.plugin.clone(),c.version)).collect()) };
-        if !start_without { return Ok(()); }
-        let store=Store::at(&self.root);
-        for plugin in unclean { if let Some((_,v))=loaded.iter().find(|(id,_)|*id==plugin) { store.quarantine(&self.app,&plugin,*v,UNCLEAN_EXIT).map_err(|e|e.to_string())?; } }
-        Ok(())
-    }
+    /// The plugins that were running when FigCraft last quit unexpectedly, for the Plugin Manager's
+    /// Problems (empty until the first pump records this run).
+    pub fn unclean_exit(&self)->Vec<ExtensionId> { lock(&self.state).unclean.clone() }
     fn quarantined(&self)->Vec<figcraft_engine::ext::PausedPlugin> {
         let store=Store::at(&self.root);
         let Ok(state)=store.state() else { return vec![] };
@@ -405,6 +397,7 @@ impl Runtime {
             }
             "canvas.overlay.set"=> { let ops=a.get("ops").cloned().unwrap_or(json!([])); if !overlay_numbers(&ops) || serde_json::to_vec(&ops).map_err(err)?.len()>1024*1024 {return Err(err("overlay budget exceeded"));} let draw:Vec<craft_ext_core::ui::tree::DrawOp>=serde_json::from_value(ops.clone()).map_err(err)?; craft_ext_core::ui::tree::validate_draw_list(&draw).map_err(err)?; changes.push((op.into(),ops)); Ok(Value::Null) },
             "ui.notify"=> { changes.push((op.into(),a)); Ok(Value::Null) },
+            "project.data.get"|"project.data.set"=>plugin_data(s,&i.plugin,op,&a),
             _=>Err(OpError::new(Code::NotFound,"unknown operation")),
         }
     }
@@ -426,7 +419,6 @@ impl Runtime {
 }
 pub const PAUSE_AFTER:u32=3;
 pub const PAUSE_REASON:&str="paused after 3 failures in a row";
-pub const UNCLEAN_EXIT:&str="the app closed unexpectedly while this plugin was running";
 #[derive(Clone,Debug,PartialEq)]
 pub enum Launch { Wasm(PathBuf), Native { exe:PathBuf, confinement:Confinement } }
 impl Launch {
@@ -442,6 +434,25 @@ impl Launch {
             }
         }
     }
+}
+/// The `plugin_data` key that holds one plugin's data, as a JSON object, on a node or the document.
+pub fn plugin_data_key(plugin:&ExtensionId)->String { format!("plugin:{plugin}") }
+fn plugin_data(s:&mut Session,plugin:&ExtensionId,op:&str,a:&Value)->Result<Value,OpError> {
+    use craft_ext_host::data::{PluginData, Target, handle};
+    let key=plugin_data_key(plugin);
+    let node=match Target::parse(a)? { Target::Document=>None, Target::Layer(id)|Target::Node(id)=>Some(figcraft_doc::NodeId(id)) };
+    let doc=s.doc().map_err(err)?;
+    let saved=match node { None=>doc.plugin_data.get(&key), Some(id)=>doc.node(id).ok_or_else(||err("node missing"))?.plugin_data.get(&key) }.cloned();
+    let parsed=saved.as_deref().map(serde_json::from_str::<Value>).transpose().map_err(err)?;
+    let mut data=PluginData::from_json(parsed.as_ref());
+    let out=handle(op,a,&mut data)?;
+    let text=data.to_json().map(|v|v.to_string());
+    if op=="project.data.set" && text!=saved {
+        let doc=s.doc_mut().map_err(err)?;
+        let map=match node { None=>&mut doc.plugin_data, Some(id)=>&mut doc.node_mut(id).ok_or_else(||err("node missing"))?.plugin_data };
+        match text { Some(t)=>{ map.insert(key,t); } None=>{ map.remove(&key); } }
+    }
+    Ok(out)
 }
 fn node_id(a:&Value)->Result<figcraft_doc::NodeId,OpError> { a["id"].as_u64().map(figcraft_doc::NodeId).ok_or_else(||err("id missing")) }
 // Keep FigCraft's page-coordinate bound in addition to the shared draw vocabulary checks.

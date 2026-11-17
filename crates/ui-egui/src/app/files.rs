@@ -122,6 +122,12 @@ impl FigApp {
         self.start_dialog(|services| services.pick_open(title, exts), true, done);
     }
 
+    /// Pick a `.craftplugin` package to install; no file needs to be in front.
+    pub(crate) fn pick_plugin_package(&mut self, done: impl FnOnce(&mut FigApp, PathBuf) + 'static) {
+        let title = i18n::tr("Install from file…");
+        self.start_dialog(|services| services.pick_open(title, &["craftplugin"]), false, done);
+    }
+
     /// Pick where to save; `done` runs as [`FigApp::pick_open`]'s does.
     pub fn pick_save(&mut self, title: &str, name: &str, exts: &[&str], done: impl FnOnce(&mut FigApp, PathBuf) + 'static) {
         self.start_dialog(|services| services.pick_save(title, name, exts), true, done);

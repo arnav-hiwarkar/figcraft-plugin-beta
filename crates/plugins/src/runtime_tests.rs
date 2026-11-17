@@ -66,7 +66,23 @@ impl Fixture {
         std::fs::write(self.rt.root.join(STATE_FILE), serde_json::to_vec(&self.state).unwrap()).unwrap();
     }
     fn dispatch(&self, s: &mut Session, calls: Vec<(&str, Value)>, commit: bool) -> (Vec<Result<Value, OpError>>, Result<(), String>) {
-        let inv = self.rt.invocation(&self.owner);
+        self.dispatch_as(&self.owner, s, calls, commit)
+    }
+    fn another(&mut self, id: &str) -> Contribution {
+        let plugin = ExtensionId::new(id).unwrap();
+        let mut other = self.owner.clone();
+        other.plugin = plugin.clone();
+        other.reference.id = plugin.clone();
+        let package = self.state.packages[&self.owner.plugin].clone();
+        self.state.packages.insert(plugin.clone(), package);
+        let setup = self.state.apps[&self.rt.app][&self.owner.plugin].clone();
+        self.state.apps.get_mut(&self.rt.app).unwrap().insert(plugin, setup);
+        self.save();
+        lock(&self.rt.state).contributions.push(other.clone());
+        other
+    }
+    fn dispatch_as(&self, owner: &Contribution, s: &mut Session, calls: Vec<(&str, Value)>, commit: bool) -> (Vec<Result<Value, OpError>>, Result<(), String>) {
+        let inv = self.rt.invocation(owner);
         let context =
             Dispatch { read_only: false, uid: s.ds().map_or(0, |d| d.uid), hash: Some("digest".into()), surface: None, completion: Arc::new(Mutex::new(None)) };
         let mut replies = Vec::new();
@@ -895,4 +911,86 @@ label = "Helper"
         plan("helper"),
         Launch::Native { exe: PathBuf::from("/rel/bin/helper"), confinement: Confinement::Restricted { release: PathBuf::from("/rel"), data: PathBuf::from("/data") } }
     );
+}
+
+fn reopen(s: &Session) -> Session {
+    let file = std::env::temp_dir().join(format!("figcraft-plugin-data-{}-{}.figcraft", std::process::id(), s.ds().unwrap().uid));
+    std::fs::write(&file, figcraft_engine::cmd::file::file_bytes(s.ds().unwrap()).unwrap()).unwrap();
+    let mut reopened = Session::empty();
+    reopened.execute("file.open", &json!({"path": file})).unwrap();
+    let _ = std::fs::remove_file(&file);
+    reopened
+}
+
+#[test]
+fn plugin_data_round_trips_through_the_file_on_nodes_and_the_document() {
+    let f = Fixture::new();
+    let mut s = Session::new();
+    let rect = s.execute("node.create", &json!({"type":"rectangle","width":10,"height":10})).unwrap()["id"].as_u64().unwrap();
+    let (replies, done) = f.dispatch(
+        &mut s,
+        vec![
+            ("project.data.set", json!({"key":"rig","value":{"bones":3},"target":{"node":rect}})),
+            ("project.data.set", json!({"key":"theme","value":"dark"})),
+        ],
+        true,
+    );
+    assert!(done.is_ok(), "{replies:?}");
+    let mut reopened = reopen(&s);
+    let (replies, _) = f.dispatch(
+        &mut reopened,
+        vec![("project.data.get", json!({"key":"rig","target":{"layer":rect}})), ("project.data.get", json!({"key":"theme"})), ("project.data.get", json!({"key":"never"}))],
+        true,
+    );
+    assert_eq!(replies[1..4].iter().map(|r| r.clone().unwrap()).collect::<Vec<_>>(), vec![json!({"bones":3}), json!("dark"), Value::Null]);
+    assert_eq!(reopened.doc().unwrap().plugin_data.get("plugin:test.plugin").map(String::as_str), Some(r#"{"theme":"dark"}"#));
+    assert_eq!(reopened.doc().unwrap().plugins.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["test.plugin"], "data makes the document reference the plugin");
+}
+
+#[test]
+fn a_plugin_reads_and_writes_only_its_own_data() {
+    let mut f = Fixture::new();
+    let other = f.another("other.plugin");
+    let mut s = Session::new();
+    f.dispatch(&mut s, vec![("project.data.set", json!({"key":"rig","value":1}))], true).1.unwrap();
+    let (replies, done) = f.dispatch_as(&other, &mut s, vec![("project.data.get", json!({"key":"rig"})), ("project.data.set", json!({"key":"rig","value":2}))], true);
+    assert!(done.is_ok());
+    assert_eq!(replies[1].clone().unwrap(), Value::Null, "another plugin's key is invisible");
+    let (replies, _) = f.dispatch(&mut s, vec![("project.data.get", json!({"key":"rig"}))], true);
+    assert_eq!(replies[1].clone().unwrap(), json!(1));
+    let keys: Vec<&str> = s.doc().unwrap().plugin_data.keys().map(String::as_str).collect();
+    assert_eq!(keys, vec!["plugin:other.plugin", "plugin:test.plugin"]);
+}
+
+#[test]
+fn plugin_data_is_one_undo_step_with_the_event() {
+    let f = Fixture::new();
+    let mut s = Session::new();
+    let rect = s.execute("node.create", &json!({"type":"rectangle","width":10,"height":10})).unwrap()["id"].as_u64().unwrap();
+    let undo = s.ds().unwrap().history.undo.len();
+    f.dispatch(&mut s, vec![("project.data.set", json!({"key":"rig","value":[1,2],"target":{"node":rect}})), ("node.update", json!({"id":rect,"props":{"name":"Rig"}}))], true).1.unwrap();
+    assert_eq!(s.ds().unwrap().history.undo.len(), undo + 1);
+    s.undo().unwrap();
+    let node = s.doc().unwrap().node(figcraft_doc::NodeId(rect)).unwrap().clone();
+    assert!(node.plugin_data.is_empty() && node.name != "Rig");
+    let (_, done) = f.dispatch(&mut s, vec![("project.data.set", json!({"key":"rig","value":1})), ("project.data.get", json!({"key":"missing node","target":{"node":1}}))], false);
+    assert!(done.is_err());
+    assert!(s.doc().unwrap().plugin_data.is_empty(), "a rolled-back event leaves no data");
+}
+
+#[test]
+fn data_of_an_absent_plugin_survives_editing_saving_and_reopening() {
+    let mut s = Session::new();
+    let rect = s.execute("node.create", &json!({"type":"rectangle","width":10,"height":10})).unwrap()["id"].as_u64().unwrap();
+    let id = figcraft_doc::NodeId(rect);
+    s.doc_mut().unwrap().node_mut(id).unwrap().plugin_data.insert("plugin:gone.plugin".into(), r#"{"state":{"v":7}}"#.into());
+    s.doc_mut().unwrap().plugin_data.insert("plugin:gone.plugin".into(), r#"{"layout":"grid"}"#.into());
+    s.execute("node.set", &json!({"ids":[rect],"props":{"x":40,"name":"Edited by hand"}})).unwrap();
+    s.execute("select.set", &json!({"ids":[rect]})).unwrap();
+    s.execute("edit.duplicate", &json!({})).unwrap();
+    let reopened = reopen(&s);
+    let doc = reopened.doc().unwrap();
+    let copies: Vec<_> = doc.nodes().filter(|n| n.name == "Edited by hand").map(|n| n.plugin_data.get("plugin:gone.plugin").cloned()).collect();
+    assert_eq!(copies, vec![Some(r#"{"state":{"v":7}}"#.to_string()); 2], "the edited layer and its duplicate keep the data");
+    assert_eq!(doc.plugin_data.get("plugin:gone.plugin").map(String::as_str), Some(r#"{"layout":"grid"}"#));
 }

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use craft_ext_core::ui::tree::{DrawOp, Node};
 use craft_ext_ui::plugin_ui::{PluginUi, EngineChoice, Host, Surface, Xf, paint_ops};
-use craft_ext_ui::craft_ext_manager::{Config, Word};
+use craft_ext_ui::craft_ext_manager::{Action, Config, Tab, Word};
 use figcraft_plugins::runtime::{JobInfo, JobState};
 use craft_ext_ui::{PluginManager, ProjectPrompt};
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
@@ -23,8 +23,9 @@ struct State {
     manager_error: Option<String>,
     manager_open: bool,
     prompt: Option<ProjectPrompt>,
-    /// The plugins the open project prompt lists as not ready (what "Open without them" skips).
-    prompt_plugins: Vec<craft_ext_core::id::ExtensionId>,
+    /// The Plugin Manager opened on Problems once for plugins running at an unexpected close.
+    unclean_shown: bool,
+    open_problems: bool,
     refreshed: Option<Instant>,
     /// The last pointer position sent during a tool gesture (page units), so a still pointer
     /// sends no updates.
@@ -46,6 +47,14 @@ fn config() -> Result<Config, String> {
     let m = figcraft_plugins::manager()?;
     let app = m.app.ok_or_else(|| tr("Plugins are unavailable").to_string())?;
     Ok(Config::app(m.store.root(), app, m.provided, m.platform))
+}
+
+fn manager_view(config: Config) -> PluginManager {
+    let mut view = PluginManager::new(config.clone()).with_install_file();
+    if let (Some(rt), Some(app)) = (figcraft_plugins::runtime(), config.scope()) {
+        view.model_mut().set_unclean_exit(app.clone(), rt.unclean_exit());
+    }
+    view
 }
 
 fn words(word: Word) -> String {
@@ -86,13 +95,21 @@ pub fn frame(app: &mut FigApp, ctx: &egui::Context) {
     });
     if prompt && let Some(statuses) = figcraft_plugins::runtime().and_then(|r| r.take_project_prompt()) {
         match config() {
-            Ok(config) => STATE.with(|st| {
-                let mut st = st.borrow_mut();
-                st.prompt_plugins = statuses.iter().filter(|(_, s)| !s.ready()).map(|(r, _)| r.id.clone()).collect();
-                st.prompt = Some(ProjectPrompt::new(config, statuses));
-            }),
+            Ok(config) => STATE.with(|st| st.borrow_mut().prompt = Some(ProjectPrompt::new(config, statuses))),
             Err(e) => log::warn!("plugins: {e}"),
         }
+    }
+    if let Some(r) = figcraft_plugins::runtime()
+        && STATE.with(|st| !st.borrow().unclean_shown)
+        && !r.unclean_exit().is_empty()
+    {
+        STATE.with(|st| {
+            let mut st = st.borrow_mut();
+            st.unclean_shown = true;
+            st.manager_open = true;
+            st.open_problems = true;
+            st.view = None;
+        });
     }
     // Escape ends a plugin tool (cancelling and rolling back an open gesture) before any shortcut
     // sees it.
@@ -109,20 +126,18 @@ pub fn frame(app: &mut FigApp, ctx: &egui::Context) {
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let paused = app.session.plugins.as_ref().map(|rt| rt.paused()).unwrap_or_default();
     if let Some(rt) = figcraft_plugins::runtime() {
-        unclean_exit_notice(&rt, ctx);
         jobs_window(&rt, ctx);
     }
+    let mut pick_package = false;
     STATE.with(|st| {
         let mut st = st.borrow_mut();
         if let Some(p) = st.prompt.as_mut()
             && let Some(outcome) = p.show(ctx, &words)
         {
-            let ids = if outcome.open_without { std::mem::take(&mut st.prompt_plugins) } else { outcome.skipped };
             if let Some(rt) = figcraft_plugins::runtime() {
-                rt.suppress_for_document(ids);
+                rt.suppress_for_document(outcome.skipped);
             }
             st.prompt = None;
-            st.prompt_plugins.clear();
         }
         if st.manager_open {
             let mut open = true;
@@ -132,13 +147,20 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                 }
                 if st.view.is_none() && st.manager_error.is_none() {
                     match config() {
-                        Ok(config) => st.view = Some(PluginManager::new(config)),
+                        Ok(config) => st.view = Some(manager_view(config)),
                         Err(e) => st.manager_error = Some(e),
                     }
                 }
+                let open_problems = std::mem::take(&mut st.open_problems);
                 let mut resume = Vec::new();
                 match st.view.as_mut() {
-                    Some(view) => view.show_with_app_problems(ui, &words, |ui| paused_problems(ui, &paused, &mut resume)),
+                    Some(view) => {
+                        if open_problems {
+                            view.model_mut().apply(Action::SetTab(Tab::Problems));
+                        }
+                        view.show_with_app_problems(ui, &words, |ui| paused_problems(ui, &paused, &mut resume));
+                        pick_package |= view.take_install_file_request();
+                    }
                     None => {
                         ui.label(format!("{}: {}", tr("Plugins are unavailable"), st.manager_error.clone().unwrap_or_default()));
                     }
@@ -150,6 +172,15 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     });
     for id in STATE.with(|st| std::mem::take(&mut st.borrow_mut().resume)) {
         app.run("plugins.resume", json!({"id": id}));
+    }
+    if pick_package {
+        app.pick_plugin_package(|_, path| {
+            STATE.with(|st| {
+                if let Some(view) = st.borrow_mut().view.as_mut() {
+                    view.install_file(path);
+                }
+            });
+        });
     }
     let Some(rt) = app.session.plugins.clone() else { return };
     let mut events: Vec<(String, u64, String, Value)> = Vec::new();
@@ -233,30 +264,6 @@ pub fn menu(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> bool {
         return true;
     }
     false
-}
-
-fn unclean_exit_notice(rt: &figcraft_plugins::runtime::Runtime, ctx: &egui::Context) {
-    let names = rt.after_unclean_exit();
-    if names.is_empty() {
-        return;
-    }
-    let mut answer = None;
-    egui::Window::new(tr("Plugins after an unexpected close")).id(egui::Id::unique("figcraft-plugins-unclean-exit")).collapsible(false).resizable(false).show(ctx, |ui| {
-        ui.label(format!("{} {}", tr("FigCraft closed unexpectedly while these plugins were running:"), names.join(", ")));
-        ui.horizontal(|ui| {
-            if ui.button(tr("Start without these plugins")).clicked() {
-                answer = Some(true);
-            }
-            if ui.button(tr("Keep them on")).clicked() {
-                answer = Some(false);
-            }
-        });
-    });
-    if let Some(start_without) = answer
-        && let Err(e) = rt.answer_unclean_exit(start_without)
-    {
-        log::warn!("plugins: {e}");
-    }
 }
 
 fn job_status(job: &JobInfo) -> String {

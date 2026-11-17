@@ -198,7 +198,12 @@ Layer reads (`node.get`, `node.children`, `page.list`) leave out each layer's `p
 which holds importers', library thumbnails', agents' and retired plugins' private strings; the
 data itself is kept in the document. This carries the retired runtime's rule (upstream's
 `doc_list_paths_tests`): a plugin gets names, never file paths, library links or another owner's
-private data. Per-plugin private layer data is not offered yet.
+private data. A plugin keeps its own data with `project.data.get` / `project.data.set`
+(`figcraft.session` 1.2): one JSON object per plugin under the `plugin:<id>` key of a layer's
+`plugin_data`, or of the document's own `plugin_data`, written inside the event so Undo removes
+it. A plugin only ever reaches its own key. The data stays in the file when the plugin is
+missing, and layers it manages are ordinary layers that keep their data when edited or duplicated.
+Writing data records the plugin in the document's references, so the project prompt names it.
 
 `figcraft-grid` and `figcraft-placeholder` are FigCraft-only UI 1.1 examples. The grid
 uses a typed form and layout tracks; placeholder copy uses a multiline editor and

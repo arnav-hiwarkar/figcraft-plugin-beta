@@ -354,6 +354,7 @@ doc_scalars! {
     Vote => vote,
     VoteHistory => vote_history,
     Plugins => plugins,
+    PluginData => plugin_data,
 }
 
 /// Keyed maps (no order): changed and added entries are put, missing ones removed.

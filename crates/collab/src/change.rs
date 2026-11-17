@@ -231,6 +231,8 @@ pub enum DocProp {
     VoteHistory,
     /// Plugin references saved with this document (never grants).
     Plugins,
+    /// Document-level plugin data (whole).
+    PluginData,
 }
 
 /// A document-level entry, by id.
