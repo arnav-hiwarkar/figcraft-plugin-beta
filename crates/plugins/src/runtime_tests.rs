@@ -806,3 +806,27 @@ fn layer_reads_leave_out_private_plugin_data() {
     }
     assert!(s.doc().unwrap().node(page).unwrap().plugin_data.contains_key("penpot.svgRawXml"), "the data itself is kept");
 }
+
+#[test]
+fn a_fifth_window_is_refused_when_asked_not_dropped_later() {
+    let f = Fixture::new();
+    let mut s = Session::new();
+    let inv = f.rt.invocation(&f.owner);
+    let tree = json!({"type":"label","text":"Window"});
+    let open = |id: &str| json!({"id": id, "title": id, "tree": tree});
+    let mut changes = Vec::new();
+    for id in ["w0", "w1", "w2", "w3"] {
+        f.rt.op(&mut s, &inv, "ui.window.open", open(id), &mut changes).unwrap();
+    }
+    let refused = f.rt.op(&mut s, &inv, "ui.window.open", open("w4"), &mut changes).unwrap_err();
+    assert_eq!(refused.code, Code::Budget, "{refused:?}");
+    // Redrawing a window the plugin already has is not a new window.
+    f.rt.op(&mut s, &inv, "ui.window.open", open("w0"), &mut changes).unwrap();
+    f.rt.apply(&inv, changes);
+    let windows = lock(&f.rt.state).surfaces.values().filter(|sf| sf.view.window && sf.owner.plugin == f.owner.plugin).count();
+    assert_eq!(windows, 4);
+    // A later event sees the four open windows too.
+    let refused = f.rt.op(&mut s, &inv, "ui.window.open", open("w5"), &mut Vec::new()).unwrap_err();
+    assert_eq!(refused.code, Code::Budget, "{refused:?}");
+    assert!(f.rt.op(&mut s, &inv, "ui.window.open", open("w3"), &mut Vec::new()).is_ok());
+}

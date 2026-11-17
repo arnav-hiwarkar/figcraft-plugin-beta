@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 use crate::{contract, grants::LiveGrants};
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(PoisonError::into_inner) }
 fn err(e: impl ToString) -> OpError { OpError::invalid(e.to_string()) }
+/// Windows one plugin may have open at once (the contract's "at most four").
+const MAX_WINDOWS: usize = 4;
 /// A layer as a plugin reads it. `plugin_data` holds strings other code keeps private (importers'
 /// raw SVG and status, library thumbnails, agents' and retired plugins' state), and no operation
 /// scopes it to one plugin yet, so it is left out. FigCraft's retired runtime applied the same rule
@@ -324,7 +326,17 @@ impl Runtime {
                 let level=lock(&self.state).contributions.iter().find(|c|c.plugin==i.plugin && c.id==i.contribution).map_or(craft_ext_core::ui::tree::UI_LEVEL,|c|c.ui_level);
                 let n:Node=serde_json::from_value(tree.clone()).map_err(err)?; n.validate_at(level).map_err(|e|err(e.0))?;
                 if op=="ui.panel.set" { let panel=a["panel"].as_str().ok_or_else(||err("panel missing"))?; if !lock(&self.state).surfaces.get(&format!("{}/{panel}",i.plugin)).is_some_and(|sf|!sf.view.window) { return Err(err("undeclared panel")); } }
-                else { let id=a["id"].as_str().ok_or_else(||err("id missing"))?; if id.is_empty() || id.len()>64 || a["title"].as_str().is_none_or(|t|t.len()>200) {return Err(err("invalid window"));} }
+                else {
+                    let id=a["id"].as_str().ok_or_else(||err("id missing"))?; if id.is_empty() || id.len()>64 || a["title"].as_str().is_none_or(|t|t.len()>200) {return Err(err("invalid window"));}
+                    // Refuse a fifth window here, before the call is acknowledged, as EffectCraft does:
+                    // `apply` cannot report anything, so a late refusal would be a silent loss.
+                    let key=format!("{}/{id}",i.plugin);
+                    let st=lock(&self.state);
+                    let mut windows: std::collections::BTreeSet<String>=st.surfaces.iter().filter(|(_,sf)|sf.view.window && sf.owner.plugin==i.plugin).map(|(k,_)|k.clone()).collect();
+                    drop(st);
+                    windows.extend(changes.iter().filter(|(o,_)|o=="ui.window.open").filter_map(|(_,prior)|prior["id"].as_str()).map(|w|format!("{}/{w}",i.plugin)));
+                    if !windows.contains(&key) && windows.len()>=MAX_WINDOWS { return Err(OpError::new(Code::Budget,"At most four windows per plugin")); }
+                }
                 if changes.len()>=64 {return Err(err("UI event budget exceeded"));}
                 changes.push((op.into(),a)); Ok(Value::Null)
             }
@@ -340,7 +352,8 @@ impl Runtime {
             if op=="canvas.overlay.set" { st.overlays.insert(i.plugin.to_string(),a); continue; }
             if op=="ui.notify" { log::info!("plugin {}: {}",i.plugin,a); continue; }
             let window=op=="ui.window.open"; let id=if window {a["id"].as_str()} else {a["panel"].as_str()}.unwrap_or_default(); let k=format!("{}/{id}",i.plugin);
-            if window && !st.surfaces.contains_key(&k) && st.surfaces.values().filter(|s|s.view.window && s.owner.plugin==i.plugin).count()>=4 {continue;}
+            // Already refused in `op`; kept so `apply` can never exceed the limit.
+            if window && !st.surfaces.contains_key(&k) && st.surfaces.values().filter(|s|s.view.window && s.owner.plugin==i.plugin).count()>=MAX_WINDOWS {continue;}
             if let Some(metadata) = a.get("form_metadata") { st.form_metadata.insert(k.clone(), metadata.clone()); } else { st.form_metadata.remove(&k); }
             if let Some(flags) = a.get("form_flags") { st.form_flags.insert(k.clone(), flags.clone()); } else { st.form_flags.remove(&k); }
             let sf=st.surfaces.entry(k.clone()).or_insert_with(||Surface {view:PluginSurface {key:k,title:a["title"].as_str().unwrap_or("Plugin").into(),tree:None,rev:0,window,open:true},owner:owner.clone()});
