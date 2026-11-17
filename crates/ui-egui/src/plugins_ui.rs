@@ -4,9 +4,9 @@ use std::time::{Duration, Instant};
 
 use craft_ext_core::ui::tree::{DrawOp, Node};
 use craft_ext_ui::plugin_ui::{PluginUi, EngineChoice, Host, Surface, Xf, paint_ops};
-use craft_ext_store::Manager;
+use craft_ext_ui::craft_ext_manager::{Config, Word};
 use figcraft_plugins::runtime::{JobInfo, JobState};
-use craft_ext_ui::{ManagerView, ProjectPrompt};
+use craft_ext_ui::{PluginManager, ProjectPrompt};
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::{Value, json};
 
@@ -19,8 +19,7 @@ const REFRESH_EVERY: Duration = Duration::from_secs(6 * 3600);
 
 #[derive(Default)]
 struct State {
-    view: Option<ManagerView>,
-    manager: Option<Arc<Manager>>,
+    view: Option<PluginManager>,
     manager_error: Option<String>,
     manager_open: bool,
     prompt: Option<ProjectPrompt>,
@@ -43,14 +42,14 @@ thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
 }
 
-fn manager(st: &mut State) -> Option<Arc<Manager>> {
-    if st.manager.is_none() && st.manager_error.is_none() {
-        match figcraft_plugins::manager() {
-            Ok(m) => st.manager = Some(Arc::new(m)),
-            Err(e) => st.manager_error = Some(e),
-        }
-    }
-    st.manager.clone()
+fn config() -> Result<Config, String> {
+    let m = figcraft_plugins::manager()?;
+    let app = m.app.ok_or_else(|| tr("Plugins are unavailable").to_string())?;
+    Ok(Config::app(m.store.root(), app, m.provided, m.platform))
+}
+
+fn words(word: Word) -> String {
+    tr(word.english()).to_string()
 }
 
 /// Opens the Plugins window (menu, Preferences).
@@ -86,11 +85,14 @@ pub fn frame(app: &mut FigApp, ctx: &egui::Context) {
         st.prompt.is_none()
     });
     if prompt && let Some(statuses) = figcraft_plugins::runtime().and_then(|r| r.take_project_prompt()) {
-        STATE.with(|st| {
-            let mut st = st.borrow_mut();
-            st.prompt_plugins = statuses.iter().filter(|(_, s)| !s.ready()).map(|(r, _)| r.id.clone()).collect();
-            st.prompt = Some(ProjectPrompt::new(statuses));
-        });
+        match config() {
+            Ok(config) => STATE.with(|st| {
+                let mut st = st.borrow_mut();
+                st.prompt_plugins = statuses.iter().filter(|(_, s)| !s.ready()).map(|(r, _)| r.id.clone()).collect();
+                st.prompt = Some(ProjectPrompt::new(config, statuses));
+            }),
+            Err(e) => log::warn!("plugins: {e}"),
+        }
     }
     // Escape ends a plugin tool (cancelling and rolling back an open gesture) before any shortcut
     // sees it.
@@ -112,10 +114,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     }
     STATE.with(|st| {
         let mut st = st.borrow_mut();
-        if st.prompt.is_some()
-            && let Some(m) = manager(&mut st)
-            && let Some(p) = st.prompt.as_mut()
-            && let Some(outcome) = p.show(ctx, &m)
+        if let Some(p) = st.prompt.as_mut()
+            && let Some(outcome) = p.show(ctx, &words)
         {
             let ids = if outcome.open_without { std::mem::take(&mut st.prompt_plugins) } else { outcome.skipped };
             if let Some(rt) = figcraft_plugins::runtime() {
@@ -126,20 +126,24 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         }
         if st.manager_open {
             let mut open = true;
-            egui::Window::new(tr("Plugins")).id(egui::Id::unique("figcraft-plugins-manager")).open(&mut open).default_width(560.0).show(ctx, |ui| {
+            egui::Window::new(tr("Plugins")).id(egui::Id::unique("figcraft-plugins-manager")).open(&mut open).default_size([980.0, 640.0]).show(ctx, |ui| {
                 if figcraft_plugins::safe_mode() {
                     ui.label(tr("Safe mode: no plugin code runs this session. Changes apply after a restart without FIGCRAFT_SAFE_MODE=1."));
                 }
-                match manager(&mut st) {
-                    Some(m) => {
-                        let mut resume = Vec::new();
-                        st.view.get_or_insert_with(ManagerView::new).show_with_app_problems(ui, &m, |ui| paused_problems(ui, &paused, &mut resume));
-                        st.resume.extend(resume);
-                    },
+                if st.view.is_none() && st.manager_error.is_none() {
+                    match config() {
+                        Ok(config) => st.view = Some(PluginManager::new(config)),
+                        Err(e) => st.manager_error = Some(e),
+                    }
+                }
+                let mut resume = Vec::new();
+                match st.view.as_mut() {
+                    Some(view) => view.show_with_app_problems(ui, &words, |ui| paused_problems(ui, &paused, &mut resume)),
                     None => {
                         ui.label(format!("{}: {}", tr("Plugins are unavailable"), st.manager_error.clone().unwrap_or_default()));
                     }
                 }
+                st.resume.extend(resume);
             });
             st.manager_open = open;
         }
@@ -309,9 +313,9 @@ fn jobs_window(rt: &figcraft_plugins::runtime::Runtime, ctx: &egui::Context) {
         });
 }
 
-fn paused_problems(ui: &mut Ui, paused: &[figcraft_engine::ext::PausedPlugin], resume: &mut Vec<String>) {
+fn paused_problems(ui: &mut Ui, paused: &[figcraft_engine::ext::PausedPlugin], resume: &mut Vec<String>) -> bool {
     if paused.is_empty() {
-        return;
+        return false;
     }
     ui.group(|ui| {
         ui.label(egui::RichText::new(tr("Turned off")).strong());
@@ -327,6 +331,7 @@ fn paused_problems(ui: &mut Ui, paused: &[figcraft_engine::ext::PausedPlugin], r
             }
         }
     });
+    true
 }
 
 /// Preferences ▸ Plugins: opens the Plugins window.
