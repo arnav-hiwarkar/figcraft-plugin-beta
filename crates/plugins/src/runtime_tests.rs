@@ -786,3 +786,23 @@ fn project_references_follow_the_loaded_release_and_name_only_used_contributions
     // A state schema change keeps the recorded release.
     assert!(updated_reference(Some(&first), &r("2.0.0", 2), "apply").is_none());
 }
+
+#[test]
+fn layer_reads_leave_out_private_plugin_data() {
+    let f = Fixture::new();
+    let mut s = Session::new();
+    let page = s.doc().unwrap().pages[0];
+    s.doc_mut().unwrap().node_mut(page).unwrap().plugin_data.insert("penpot.svgRawXml".into(), "<svg>private</svg>".into());
+    let inv = f.rt.invocation(&f.owner);
+    let one = f.rt.op(&mut s, &inv, "node.get", json!({"id": page.0}), &mut vec![]).unwrap();
+    let pages = f.rt.op(&mut s, &inv, "page.list", json!({}), &mut vec![]).unwrap();
+    let frame = s.execute("node.create", &json!({"type": "frame", "parent": page.0})).unwrap()["id"].as_u64().unwrap();
+    s.doc_mut().unwrap().node_mut(figcraft_doc::NodeId(frame)).unwrap().plugin_data.insert("figcraft.thumbnail".into(), "private".into());
+    let children = f.rt.op(&mut s, &inv, "node.children", json!({"id": page.0}), &mut vec![]).unwrap();
+    assert!(children.as_array().is_some_and(|c| !c.is_empty()), "{children}");
+    for v in [&one, &pages[0], &children[0]] {
+        assert!(v.get("plugin_data").is_none() && !v.to_string().contains("private"), "{v}");
+        assert!(v.get("name").is_some(), "{v}");
+    }
+    assert!(s.doc().unwrap().node(page).unwrap().plugin_data.contains_key("penpot.svgRawXml"), "the data itself is kept");
+}

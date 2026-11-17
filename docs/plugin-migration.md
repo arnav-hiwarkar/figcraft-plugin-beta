@@ -194,6 +194,11 @@ Engine argument validation is retained, with additional 256 KiB argument, depth 
 4096-element array limits. SVG exports accept 1–256 existing layers and return at most 4 MiB.
 Image placement/replacement only accepts inline base64 data; filesystem paths are refused.
 No file, library, network, shell or process command is forwarded.
+Layer reads (`node.get`, `node.children`, `page.list`) leave out each layer's `plugin_data`,
+which holds importers', library thumbnails', agents' and retired plugins' private strings; the
+data itself is kept in the document. This carries the retired runtime's rule (upstream's
+`doc_list_paths_tests`): a plugin gets names, never file paths, library links or another owner's
+private data. Per-plugin private layer data is not offered yet.
 
 `figcraft-grid` and `figcraft-placeholder` are FigCraft-only UI 1.1 examples. The grid
 uses a typed form and layout tracks; placeholder copy uses a multiline editor and

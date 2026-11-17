@@ -8,6 +8,15 @@ use serde_json::{Value, json};
 use crate::{contract, grants::LiveGrants};
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(PoisonError::into_inner) }
 fn err(e: impl ToString) -> OpError { OpError::invalid(e.to_string()) }
+/// A layer as a plugin reads it. `plugin_data` holds strings other code keeps private (importers'
+/// raw SVG and status, library thumbnails, agents' and retired plugins' state), and no operation
+/// scopes it to one plugin yet, so it is left out. FigCraft's retired runtime applied the same rule
+/// to paths and library links: a plugin gets names, never another owner's private data.
+fn layer_view(n: &figcraft_doc::Node) -> Result<Value, OpError> {
+    let mut v = serde_json::to_value(n).map_err(err)?;
+    if let Some(o) = v.as_object_mut() { o.remove("plugin_data"); }
+    Ok(v)
+}
 fn key(i: &Invocation) -> usize { Arc::as_ptr(&i.cancel) as usize }
 #[derive(Clone)]
 struct Dispatch { read_only: bool, uid: u64, hash: Option<String>, surface: Option<(String,u64)>, completion: Arc<Mutex<Option<Result<(),String>>>> }
@@ -261,14 +270,14 @@ impl Runtime {
                 let doc = s.doc().map_err(err)?;
                 let n = doc.node(node_id(&a)?).ok_or_else(||err("node missing"))?;
                 if n.children.len() > 4096 { return Err(err("too many children")); }
-                Ok(json!(n.children.iter().filter_map(|id| doc.node(*id)).collect::<Vec<_>>()))
+                n.children.iter().filter_map(|id| doc.node(*id)).map(layer_view).collect::<Result<Vec<_>,_>>().map(Value::Array)
             }
             "document.info"=>Ok(json!({"name":s.doc().map_err(err)?.name,"uid":s.ds().map_err(err)?.uid})),
-            "page.list"=>Ok(json!(s.doc().map_err(err)?.pages.iter().filter_map(|id|s.doc().ok()?.node(*id)).collect::<Vec<_>>())),
+            "page.list"=>s.doc().map_err(err)?.pages.iter().filter_map(|id|s.doc().ok()?.node(*id)).map(layer_view).collect::<Result<Vec<_>,_>>().map(Value::Array),
             "selection.get"=>Ok(json!({"ids":s.selection()})),
             "viewport.set"=> { validate_args(&a,0)?; let rt=s.plugins.take(); let out=s.execute("view.set",&a).map_err(err); s.plugins=rt; out },
             "viewport.get"=>serde_json::to_value(&s.ds().map_err(err)?.view).map_err(err),
-            "node.get"=> { let id=node_id(&a)?; s.doc().map_err(err)?.node(id).ok_or_else(||err("node missing")).and_then(|n|serde_json::to_value(n).map_err(err)) },
+            "node.get"=> { let id=node_id(&a)?; s.doc().map_err(err)?.node(id).ok_or_else(||err("node missing")).and_then(layer_view) },
             "node.create"|"node.update"|"node.delete"|"selection.set"=> {
                 validate_args(&a, 0)?;
                 let command=match op { "node.update"=>"node.set","node.delete"=>"edit.delete","selection.set"=>"select.set",other=>other };
