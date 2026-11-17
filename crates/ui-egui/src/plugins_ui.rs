@@ -1,10 +1,3 @@
-//! Craft plugins in the desktop UI (native only): the Plugins menu (Plugins ▸ <plugin> ▸ <label>),
-//! the Plugins window (the shared `craft_ext_ui::ManagerView`), the project prompt, host-drawn
-//! plugin panels and `ui.window.open` windows (from `craft_ext_core::ui::Node` trees), plugin tools
-//! (toolbar strip, canvas pointer gestures, Escape cancels and rolls back) and canvas overlays.
-//! Plugin code never runs here: widget changes and pointer events go to the plugin runtime, which
-//! services document operations on this (the document) thread.
-
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,6 +5,7 @@ use std::time::{Duration, Instant};
 use craft_ext_core::ui::tree::{DrawOp, Node};
 use craft_ext_ui::plugin_ui::{PluginUi, EngineChoice, Host, Surface, Xf, paint_ops};
 use craft_ext_store::Manager;
+use figcraft_plugins::runtime::{JobInfo, JobState};
 use craft_ext_ui::{ManagerView, ProjectPrompt};
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::{Value, json};
@@ -110,10 +104,12 @@ pub fn frame(app: &mut FigApp, ctx: &egui::Context) {
     }
 }
 
-/// The project prompt, the Plugins window (with the plugins paused this session and their Resume
-/// action), and plugin windows (`ui.window.open`; panels dock in [`crate::plugin_dock`]).
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let paused = app.session.plugins.as_ref().map(|rt| rt.paused()).unwrap_or_default();
+    if let Some(rt) = figcraft_plugins::runtime() {
+        unclean_exit_notice(&rt, ctx);
+        jobs_window(&rt, ctx);
+    }
     STATE.with(|st| {
         let mut st = st.borrow_mut();
         if st.prompt.is_some()
@@ -121,7 +117,6 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             && let Some(p) = st.prompt.as_mut()
             && let Some(outcome) = p.show(ctx, &m)
         {
-            // Skip / Open without: those plugins do nothing for this document.
             let ids = if outcome.open_without { std::mem::take(&mut st.prompt_plugins) } else { outcome.skipped };
             if let Some(rt) = figcraft_plugins::runtime() {
                 rt.suppress_for_document(ids);
@@ -236,17 +231,93 @@ pub fn menu(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> bool {
     false
 }
 
-/// The Plugins window's problems from this session: each plugin paused after three failures, its
-/// last error, and Resume (clears the count and starts the plugin afresh; pauses are never saved).
+fn unclean_exit_notice(rt: &figcraft_plugins::runtime::Runtime, ctx: &egui::Context) {
+    let names = rt.after_unclean_exit();
+    if names.is_empty() {
+        return;
+    }
+    let mut answer = None;
+    egui::Window::new(tr("Plugins after an unexpected close")).id(egui::Id::unique("figcraft-plugins-unclean-exit")).collapsible(false).resizable(false).show(ctx, |ui| {
+        ui.label(format!("{} {}", tr("FigCraft closed unexpectedly while these plugins were running:"), names.join(", ")));
+        ui.horizontal(|ui| {
+            if ui.button(tr("Start without these plugins")).clicked() {
+                answer = Some(true);
+            }
+            if ui.button(tr("Keep them on")).clicked() {
+                answer = Some(false);
+            }
+        });
+    });
+    if let Some(start_without) = answer
+        && let Err(e) = rt.answer_unclean_exit(start_without)
+    {
+        log::warn!("plugins: {e}");
+    }
+}
+
+fn job_status(job: &JobInfo) -> String {
+    match &job.state {
+        JobState::Running if job.note.is_empty() => tr("Working…").to_string(),
+        JobState::Running => job.note.clone(),
+        JobState::Done(_) => tr("Done").to_string(),
+        JobState::Failed(why) => format!("{}: {why}", tr("Failed")),
+        JobState::Cancelled => tr("Cancelled").to_string(),
+    }
+}
+
+fn jobs_window(rt: &figcraft_plugins::runtime::Runtime, ctx: &egui::Context) {
+    let jobs = rt.jobs.list();
+    if jobs.is_empty() {
+        return;
+    }
+    if jobs.iter().any(|j| !j.state.finished()) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+    let names = rt.plugin_names();
+    egui::Window::new(tr("Plugin jobs"))
+        .id(egui::Id::unique("figcraft-plugin-jobs"))
+        .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -36.0))
+        .default_open(true)
+        .resizable(false)
+        .show(ctx, |ui| {
+            for job in &jobs {
+                let plugin = names.iter().find(|(id, _)| id == &job.plugin).map_or_else(|| job.plugin.to_string(), |(_, n)| n.clone());
+                ui.horizontal(|ui| {
+                    ui.strong(&job.label);
+                    ui.weak(plugin);
+                });
+                ui.horizontal(|ui| {
+                    if !job.state.finished() {
+                        match job.progress {
+                            Some(p) => {
+                                ui.add(egui::ProgressBar::new(p).desired_width(140.0).show_percentage());
+                            }
+                            None => {
+                                ui.spinner();
+                            }
+                        }
+                    }
+                    ui.label(job_status(job));
+                    if !job.state.finished() && job.cancellable && ui.small_button(tr("Cancel")).clicked() {
+                        rt.jobs.cancel(job.id, false);
+                    }
+                });
+            }
+            if jobs.iter().any(|j| j.state.finished()) && ui.button(tr("Clear finished")).clicked() {
+                rt.jobs.clear_finished();
+            }
+        });
+}
+
 fn paused_problems(ui: &mut Ui, paused: &[figcraft_engine::ext::PausedPlugin], resume: &mut Vec<String>) {
     if paused.is_empty() {
         return;
     }
     ui.group(|ui| {
-        ui.label(egui::RichText::new(tr("Problems this session")).strong());
+        ui.label(egui::RichText::new(tr("Turned off")).strong());
         for p in paused {
             ui.horizontal_wrapped(|ui| {
-                ui.label(format!("{} ({}): {}", p.name, p.id, tr("paused after three failures")));
+                ui.label(format!("{} ({})", p.name, p.id));
                 if ui.button(tr("Resume")).clicked() {
                     resume.push(p.id.clone());
                 }

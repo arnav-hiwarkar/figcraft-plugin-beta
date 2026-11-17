@@ -464,19 +464,23 @@ fn paused_plugin_is_listed_and_resume_reinstantiates_it_with_a_clear_count() {
     }
     let paused = f.rt.paused();
     assert_eq!(paused.len(), 1);
-    assert_eq!((paused[0].id.as_str(), paused[0].name.as_str(), paused[0].reason.as_str()), ("test.plugin", "Test", "trap: unreachable"));
+    assert_eq!(
+        (paused[0].id.as_str(), paused[0].name.as_str(), paused[0].reason.as_str()),
+        ("test.plugin", "Test", "paused after 3 failures in a row: trap: unreachable")
+    );
+    let saved = Store::at(&f.rt.root).state().unwrap().apps[&f.rt.app][&f.owner.plugin].quarantine.clone().unwrap();
+    assert_eq!((saved.version, saved.reason.as_str()), (f.owner.version, "paused after 3 failures in a row: trap: unreachable"));
+    assert!(f.rt.grants.stopped(&f.owner.plugin, f.owner.version), "a quarantined release stays off at the next start");
     assert!(f.rt.deliver(&mut s, &f.owner, json!({"event":"command"}), true).unwrap_err().contains("paused"));
-    // The stored program is what resume instantiates afresh.
     let plugin = Plugin::load("test.plugin", &wat::parse_str(OK_MODULE).unwrap()).unwrap();
     lock(&f.rt.state).programs.insert(f.owner.worker.clone(), Program::Wasm(plugin));
     f.rt.resume(&mut s, "test.plugin").unwrap();
-    // The failed instance's worker was replaced (its queue closed, so its thread ended).
     failing.join().unwrap();
+    assert!(Store::at(&f.rt.root).state().unwrap().apps[&f.rt.app][&f.owner.plugin].quarantine.is_none());
     assert!(f.rt.paused().is_empty());
     assert!(!lock(&f.rt.state).failures.contains_key(&f.owner.plugin), "the count is cleared");
     f.rt.deliver(&mut s, &f.owner, json!({"event":"command","id":"command"}), true).unwrap();
     assert!(f.rt.resume(&mut s, "test.plugin").is_err(), "resuming twice is refused");
-    // Through the session command the UI and scripts use.
     let mut s2 = Session::new();
     s2.plugins = Some(f.rt.clone());
     assert_eq!(s2.execute("plugins.paused", &json!({})).unwrap(), json!([]));
@@ -829,4 +833,66 @@ fn a_fifth_window_is_refused_when_asked_not_dropped_later() {
     let refused = f.rt.op(&mut s, &inv, "ui.window.open", open("w5"), &mut Vec::new()).unwrap_err();
     assert_eq!(refused.code, Code::Budget, "{refused:?}");
     assert!(f.rt.op(&mut s, &inv, "ui.window.open", open("w3"), &mut Vec::new()).is_ok());
+}
+
+#[test]
+fn a_finished_job_reaches_its_contribution_as_one_event() {
+    let f = Fixture::new();
+    let ticket = f.rt.jobs.admit(&f.owner.plugin, "command", "Trace", true).unwrap();
+    let orphan = f.rt.jobs.admit(&ExtensionId::new("test.gone").unwrap(), "command", "Orphan", true).unwrap();
+    ticket.finish(JobState::Done(json!({"paths": 2})));
+    orphan.finish(JobState::Cancelled);
+    let events: Vec<(String, String, Value)> = f.rt.job_events().into_iter().map(|(c, e)| (c.plugin.to_string(), c.id, e)).collect();
+    assert_eq!(events, vec![("test.plugin".to_string(), "command".to_string(), json!({"event":"job","job":1,"ok":true,"result":{"paths":2}}))]);
+    assert!(f.rt.job_events().is_empty(), "each job is delivered once");
+}
+
+#[test]
+fn jobs_of_plugins_that_are_no_longer_loaded_are_cancelled() {
+    let f = Fixture::new();
+    let mine = f.rt.jobs.admit(&f.owner.plugin, "command", "Mine", true).unwrap();
+    let gone = f.rt.jobs.admit(&ExtensionId::new("test.gone").unwrap(), "command", "Gone", true).unwrap();
+    f.rt.cancel_unloaded_jobs();
+    assert!(!mine.cancel.load(Ordering::Relaxed));
+    assert!(gone.cancel.load(Ordering::Relaxed));
+}
+
+#[test]
+fn hybrid_packages_run_modules_sandboxed_and_restricted_helpers_confined() {
+    let platform = craft_ext_host::native::platform();
+    let manifest = Manifest::parse(
+        format!(
+            r#"schema = 2
+id = "test.hybrid"
+name = "Hybrid"
+version = "1.0.0"
+license = "MIT"
+source = "https://example.com/tests"
+summary = "Tests"
+apps = ["figcraft"]
+[native]
+mode = "restricted"
+executables = {{ "{platform}" = "bin/helper" }}
+[[contribution]]
+id = "sandboxed"
+kind = "command"
+contract = "figcraft.session@1.0"
+label = "Sandboxed"
+module = "main.wasm"
+[[contribution]]
+id = "helper"
+kind = "command"
+contract = "figcraft.session@1.0"
+label = "Helper"
+"#
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    let plan = |id: &str| Launch::plan(&manifest, manifest.contribution(id).unwrap(), std::path::Path::new("/rel"), std::path::Path::new("/data")).unwrap();
+    assert_eq!(plan("sandboxed"), Launch::Wasm(PathBuf::from("/rel/main.wasm")));
+    assert_eq!(
+        plan("helper"),
+        Launch::Native { exe: PathBuf::from("/rel/bin/helper"), confinement: Confinement::Restricted { release: PathBuf::from("/rel"), data: PathBuf::from("/data") } }
+    );
 }
