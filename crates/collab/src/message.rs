@@ -10,9 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::Error;
 use crate::change::Change;
 
-/// The protocol version a client announces in [`Hello`] (2: the welcome says what you may do, and
-/// connections can manage a server or use a file's team library).
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 
 /// The first byte of every binary message.
 pub const WIRE_VERSION: u8 = 1;

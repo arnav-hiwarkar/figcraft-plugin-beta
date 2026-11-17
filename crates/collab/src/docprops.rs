@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use base64::Engine as _;
-use figcraft_doc::{Collection, Comment, DevSnapshot, Document, ImageData, Style, Variable};
+use figcraft_doc::{Collection, Comment, DevSnapshot, Document, ImageData, Node, NodeId, Style, Variable};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -354,7 +354,6 @@ doc_scalars! {
     Vote => vote,
     VoteHistory => vote_history,
     Plugins => plugins,
-    PluginData => plugin_data,
 }
 
 /// Keyed maps (no order): changed and added entries are put, missing ones removed.
@@ -395,7 +394,12 @@ pub(crate) fn diff(a: &Document, b: &Document, out: &mut Vec<Change>) -> Result<
         image_json,
         out,
     )?;
-    diff_map(&a.votes, &b.votes, |x, y| x == y, |k| Entry::Ballot(k.clone()), Json::of, out)
+    diff_map(&a.votes, &b.votes, |x, y| x == y, |k| Entry::Ballot(k.clone()), Json::of, out)?;
+    diff_map(&a.plugin_data, &b.plugin_data, |x, y| x == y, |k| Entry::PluginData(k.clone()), Json::of, out)
+}
+
+pub(crate) fn diff_node_plugin_data(id: NodeId, a: &Node, b: &Node, out: &mut Vec<Change>) -> Result<(), Error> {
+    diff_map(&a.plugin_data, &b.plugin_data, |x, y| x == y, |k| Entry::NodePluginData(id, k.clone()), Json::of, out)
 }
 
 /// [`apply_indexed`] for one change on its own.
@@ -422,6 +426,10 @@ pub(crate) fn apply_indexed(doc: &mut Document, change: &Change, index: &mut Ind
                 DocProp::CollectionOrder => COLLECTIONS.reorder(doc, value, index),
                 DocProp::Variables => VARIABLES.set_whole(doc, value, index),
                 DocProp::VariableOrder => VARIABLES.reorder(doc, value, index),
+                DocProp::PluginData => {
+                    doc.plugin_data = value.read("plugin_data")?;
+                    Ok(())
+                }
                 _ => Err(Error::Invalid(format!("{prop:?} is not a list"))),
             }?;
         }
@@ -440,6 +448,14 @@ pub(crate) fn apply_indexed(doc: &mut Document, change: &Change, index: &mut Ind
             }
             Entry::Ballot(k) => {
                 doc.votes.insert(k.clone(), value.read("ballot")?);
+            }
+            Entry::PluginData(k) => {
+                doc.plugin_data.insert(k.clone(), value.read("plugin data")?);
+            }
+            Entry::NodePluginData(id, k) => {
+                if let Ok(n) = doc.get_mut(*id) {
+                    n.plugin_data.insert(k.clone(), value.read("plugin data")?);
+                }
             }
         },
         Change::Remove { entry } => match entry {
@@ -465,6 +481,16 @@ pub(crate) fn apply_indexed(doc: &mut Document, change: &Change, index: &mut Ind
             Entry::Ballot(k) => {
                 doc.votes.remove(k);
             }
+            Entry::PluginData(k) => {
+                doc.plugin_data.remove(k);
+            }
+            Entry::NodePluginData(id, k) => {
+                if doc.node(*id).is_some_and(|n| n.plugin_data.contains_key(k))
+                    && let Ok(n) = doc.get_mut(*id)
+                {
+                    n.plugin_data.remove(k);
+                }
+            }
         },
         _ => return Err(Error::Invalid("not a document-level change".into())),
     }
@@ -488,6 +514,7 @@ pub(crate) fn get(doc: &Document, prop: DocProp) -> Result<Json, Error> {
         DocProp::CollectionOrder => order(&doc.variables.collections),
         DocProp::Variables => Json::of(&doc.variables.variables),
         DocProp::VariableOrder => order(&doc.variables.variables),
+        DocProp::PluginData => Json::of(&doc.plugin_data),
         _ => Err(Error::Invalid(format!("{prop:?} has no value"))),
     }
 }
@@ -502,6 +529,8 @@ pub(crate) fn entry_value(doc: &Document, entry: &Entry) -> Result<Option<Json>,
         Entry::DevSnapshot(k) => doc.dev_snapshots.get(k).map(|s| Json::of(s.as_ref())),
         Entry::Image(k) => doc.images.get(k).map(image_json),
         Entry::Ballot(k) => doc.votes.get(k).map(Json::of),
+        Entry::PluginData(k) => doc.plugin_data.get(k).map(Json::of),
+        Entry::NodePluginData(id, k) => doc.node(*id).and_then(|n| n.plugin_data.get(k)).map(Json::of),
     };
     value.transpose()
 }
@@ -516,6 +545,8 @@ pub(crate) fn has(doc: &Document, entry: &Entry) -> bool {
         Entry::DevSnapshot(k) => doc.dev_snapshots.contains_key(k),
         Entry::Image(k) => doc.images.contains_key(k),
         Entry::Ballot(k) => doc.votes.contains_key(k),
+        Entry::PluginData(k) => doc.plugin_data.contains_key(k),
+        Entry::NodePluginData(id, k) => doc.node(*id).is_some_and(|n| n.plugin_data.contains_key(k)),
     }
 }
 

@@ -43,7 +43,9 @@ pub fn diff(from: &Replica, to: &Document) -> Result<Diff, Error> {
             }
             (Some(o), Some(n)) => {
                 for p in Prop::FIELDS {
-                    if p.differs(o, n) {
+                    if *p == Prop::PluginData {
+                        crate::docprops::diff_node_plugin_data(id, o, n, &mut fields)?;
+                    } else if p.differs(o, n) {
                         fields.push(Change::Set { id, prop: *p, value: p.get(n)? });
                     }
                 }

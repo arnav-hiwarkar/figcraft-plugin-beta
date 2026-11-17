@@ -321,3 +321,36 @@ fn a_chain_of_new_nested_layers_is_created_parents_first() {
     }
     assert_eq!(round_trip(&a, &b).iter().filter(|c| matches!(c, Change::Create { .. })).count(), 400);
 }
+
+#[test]
+fn two_plugins_writing_their_own_data_at_once_keep_both() {
+    let mut base = Document::new("t");
+    let page = base.first_page().unwrap();
+    let layer = rect(&mut base, page, "Shared");
+    base.get_mut(layer).unwrap().plugin_data.insert("figcraft.thumbnail".into(), "kept".into());
+    let base = Replica::new(base);
+    let write = |key: &str, value: &str| {
+        let mut d = base.document().clone();
+        d.plugin_data.insert(key.into(), value.into());
+        d.get_mut(layer).unwrap().plugin_data.insert(key.into(), value.into());
+        round_trip(&base, &d)
+    };
+    let alice = write("plugin:io.github.alice.rig", r#"{"bones":3}"#);
+    let bob = write("plugin:io.github.bob.notes", r#"{"text":"hi"}"#);
+    assert_eq!(
+        alice,
+        vec![
+            Change::Put { entry: Entry::NodePluginData(layer, "plugin:io.github.alice.rig".into()), value: Json::of(&r#"{"bones":3}"#).unwrap() },
+            Change::Put { entry: Entry::PluginData("plugin:io.github.alice.rig".into()), value: Json::of(&r#"{"bones":3}"#).unwrap() },
+        ]
+    );
+    let mut server = base.clone();
+    server.apply(&alice, Mode::Strict).unwrap();
+    server.apply(&bob, Mode::Strict).unwrap();
+    let keys = |m: &BTreeMap<String, String>| m.keys().cloned().collect::<Vec<_>>();
+    assert_eq!(keys(&server.document().plugin_data), vec!["plugin:io.github.alice.rig", "plugin:io.github.bob.notes"]);
+    assert_eq!(keys(&server.document().node(layer).unwrap().plugin_data), vec!["figcraft.thumbnail", "plugin:io.github.alice.rig", "plugin:io.github.bob.notes"]);
+    let mut cleared = server.document().clone();
+    cleared.get_mut(layer).unwrap().plugin_data.remove("plugin:io.github.bob.notes");
+    assert_eq!(round_trip(&server, &cleared), vec![Change::Remove { entry: Entry::NodePluginData(layer, "plugin:io.github.bob.notes".into()) }]);
+}

@@ -185,11 +185,17 @@ As built:
 
 ## Messages
 
-*Built* (`figcraft_collab::message`): the types below and both encodings. Protocol version 2 (the
+*Built* (`figcraft_collab::message`): the types below and both encodings. Protocol version 3 (the
 `Hello`'s `protocol`): the welcome says what the client may do, and a connection can manage a
 server's files or use a file's team library instead of joining one; a client of another version is
 refused with the reason. (The library messages came later within version 2: a server from before
 them can't read them and refuses the connection.)
+
+**Version 3** syncs plugin data per owner key: `Put`/`Remove` of `pluginData` (a document key) and
+`nodePluginData` (a layer and key) entries, so two plugins writing their own data at once both keep
+it. Version 2 sent document plugin data as one whole `pluginData` property and could not read the new
+entries, so version-2 apps and servers are refused in both directions with the version reason
+rather than losing a write; a whole `pluginData` change already in a server's journal still applies.
 
 **Signals (cursor chat, spotlight)** came later within version 2 too, without breaking older apps
 in either direction. A client that reads them says so with the word `signals` in its hello's
