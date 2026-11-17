@@ -1,7 +1,7 @@
 //! Workers own guest instances; only pump executes document operations.
 use std::{collections::{BTreeMap, VecDeque}, sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}, path::PathBuf};
 use craft_ext_core::{id::{AppId, ExtensionId}, version::Version, manifest::{ContributionKind, Manifest, NativeMode, Runtime as Execution}, permission::Permission, project::{PluginRef, Source, Status}, ui::tree::Node};
-use craft_ext_host::{api::{AppApi, Grants, Invocation, OpError, Code, authorize}, native::{Confinement, Helper}, wasm::{Plugin, Session as Guest}};
+use craft_ext_host::{api::{AppApi, Grants, Invocation, OpError, Code, authorize}, native::{Confinement, Helper, HelperLaunch}, wasm::{Plugin, Session as Guest}};
 pub use craft_ext_host::jobs::{JobBoard, JobInfo, JobState};
 use craft_ext_store::{Manager, Store, view::GrantView};
 use figcraft_engine::{Session, EngineError, ext::{PluginRuntime, PluginCommand, PluginSurface, GroupMark}};
@@ -221,7 +221,7 @@ impl Runtime {
             enum Runner { Wasm(Guest), Native(Helper) }
             let mut runner=match program {
                 Program::Wasm(p)=>Guest::new(&p,api,grants,log).map(|mut g|{ g.set_jobs(jobs); Runner::Wasm(g) }),
-                Program::Native{exe,work,confinement}=>Helper::start_confined(&plugin,version,&exe,&work,api,grants,log,&confinement).map(|mut h|{ h.set_jobs(jobs); Runner::Native(h) }),
+                Program::Native{exe,work,confinement}=>Helper::start(&plugin,version,&HelperLaunch{exe,work,confinement},api,grants,log).map(|mut h|{ h.set_jobs(jobs); Runner::Native(h) }),
             };
             loop {
                 if let Ok(Runner::Native(h))=&mut runner && !h.supervise() { break; }
